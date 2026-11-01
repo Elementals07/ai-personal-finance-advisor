@@ -1,275 +1,139 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import API from '../../api/axios';
-import { HiOutlineSparkles } from 'react-icons/hi2';
+import { HiOutlineSparkles, HiOutlineArrowPath, HiOutlineExclamationTriangle } from 'react-icons/hi2';
 import toast from 'react-hot-toast';
-import { renderAdvisorMarkdown } from '../../utils/advisorFormatter';
+import { AdvisorMarkdown } from '../../utils/advisorFormatter';
 
-// ── Health Signal Configuration ──────────────────────────────────────────────
 const HEALTH_CONFIG = {
     green: {
-        bg:    'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)',
-        border: '#6ee7b7',
-        icon:   '🟢',
-        label:  'Finances look healthy',
-        text:   '#065f46',
+        bannerClass: 'good',
+        label: 'Finances look healthy within your plan',
     },
     yellow: {
-        bg:    'linear-gradient(135deg, #fef9c3 0%, #fde68a 100%)',
-        border: '#fbbf24',
-        icon:   '🟡',
-        label:  'Some areas need attention',
-        text:   '#92400e',
+        bannerClass: 'warning',
+        label: 'Some spending areas need attention',
     },
     red: {
-        bg:    'linear-gradient(135deg, #fee2e2 0%, #fca5a5 100%)',
-        border: '#f87171',
-        icon:   '🔴',
-        label:  'Action needed — spending is off track',
-        text:   '#7f1d1d',
+        bannerClass: 'danger',
+        label: 'Action needed — spending is off track',
     }
 };
 
-// ── Category badge styling by flag ───────────────────────────────────────────
-const FLAG_STYLE = {
-    major_spike: { icon: '🔴', bg: '#fee2e2', border: '#fca5a5', text: '#7f1d1d' },
-    spike:       { icon: '🟡', bg: '#fef9c3', border: '#fde68a', text: '#78350f' },
-    saving:      { icon: '🟢', bg: '#d1fae5', border: '#6ee7b7', text: '#065f46' },
-    normal:      { icon: '✅', bg: '#f0f9ff', border: '#bae6fd', text: '#0c4a6e' },
-    new:         { icon: '🆕', bg: '#f5f3ff', border: '#c4b5fd', text: '#4c1d95' },
-};
-
-/** Compact Indian-locale number formatter (₹12,345 → ₹12.3K, ₹1,23,456 → ₹1.2L) */
-function shortFmt(n) {
-    if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
-    if (n >= 1000)   return `₹${(n / 1000).toFixed(1)}K`;
-    return `₹${n}`;
-}
-
-// ── Traffic Light Banner ─────────────────────────────────────────────────────
-const HealthBanner = ({ signal }) => {
-    const cfg = HEALTH_CONFIG[signal] || HEALTH_CONFIG.green;
-    return (
-        <div style={{
-            background:   cfg.bg,
-            border:       `1px solid ${cfg.border}`,
-            borderRadius: '10px',
-            padding:      '0.65rem 1rem',
-            marginBottom: '1rem',
-            display:      'flex',
-            alignItems:   'center',
-            gap:          '0.5rem',
-        }}>
-            <span style={{ fontSize: '1.2rem' }}>{cfg.icon}</span>
-            <span style={{ fontWeight: 700, color: cfg.text, fontSize: '0.9rem' }}>
-                {cfg.label}
-            </span>
-        </div>
-    );
-};
-
-// ── Category Delta Badges ────────────────────────────────────────────────────
-const CategoryBadges = ({ deltaMatrix }) => {
-    if (!deltaMatrix || deltaMatrix.length === 0) return null;
-
-    // Only show spikes, savings, and majors — skip plain normal ones to save space
-    const notable = deltaMatrix.filter(d =>
-        d.flag === 'major_spike' || d.flag === 'spike' || d.flag === 'saving'
-    );
-    const rest = deltaMatrix.filter(d => d.flag === 'normal' || d.flag === 'new');
-
-    return (
-        <div style={{ marginBottom: '1.25rem' }}>
-            <p style={{
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                marginBottom: '0.5rem'
-            }}>
-                Category Snapshot
-            </p>
-
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                {notable.map(d => {
-                    const s = FLAG_STYLE[d.flag];
-                    const changeStr = d.changePercent !== null
-                        ? (d.changePercent > 0 ? `+${d.changePercent}%` : `${d.changePercent}%`)
-                        : 'New';
-                    return (
-                        <div key={d.category} style={{
-                            background:   s.bg,
-                            border:       `1px solid ${s.border}`,
-                            borderRadius: '20px',
-                            padding:      '0.3rem 0.65rem',
-                            display:      'flex',
-                            alignItems:   'center',
-                            gap:          '0.35rem',
-                            fontSize:     '0.78rem',
-                            color:        s.text,
-                            fontWeight:   600,
-                        }}>
-                            <span>{s.icon}</span>
-                            <span>{d.category}</span>
-                            <span style={{ opacity: 0.8, fontWeight: 400 }}>
-                                {shortFmt(d.current)} {changeStr && `(${changeStr})`}
-                            </span>
-                        </div>
-                    );
-                })}
-
-                {/* Collapsible normal categories */}
-                {rest.map(d => {
-                    const s = FLAG_STYLE[d.flag];
-                    return (
-                        <div key={d.category} style={{
-                            background:   s.bg,
-                            border:       `1px solid ${s.border}`,
-                            borderRadius: '20px',
-                            padding:      '0.3rem 0.65rem',
-                            display:      'flex',
-                            alignItems:   'center',
-                            gap:          '0.35rem',
-                            fontSize:     '0.76rem',
-                            color:        s.text,
-                            opacity:      0.85,
-                        }}>
-                            <span>{s.icon}</span>
-                            <span>{d.category}</span>
-                            <span style={{ opacity: 0.7 }}>{shortFmt(d.current)}</span>
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
-    );
-};
-
-// ── Micro Leakage Warning ────────────────────────────────────────────────────
-const MicroLeakageWarning = ({ microLeakage }) => {
-    if (!microLeakage || microLeakage.length === 0) return null;
-    return (
-        <div style={{
-            background:   '#fff7ed',
-            border:       '1px solid #fed7aa',
-            borderRadius: '8px',
-            padding:      '0.6rem 0.9rem',
-            marginBottom: '1rem',
-            fontSize:     '0.8rem',
-            color:        '#7c2d12',
-        }}>
-            <strong>⚠ Small spend leakage detected: </strong>
-            {microLeakage.map((m, i) => (
-                <span key={m.category}>
-                    {i > 0 && ' · '}
-                    {m.category} {shortFmt(m.total)} ({m.frequency} transactions)
-                </span>
-            ))}
-        </div>
-    );
-};
-
-// ── Main Component ───────────────────────────────────────────────────────────
 const AnalysisPanel = () => {
-    const [analysis,     setAnalysis]     = useState(null);
-    const [summary,      setSummary]      = useState(null);
-    const [healthSignal, setHealthSignal] = useState(null);
-    const [loading,      setLoading]      = useState(false);
-    const [cached,       setCached]       = useState(false);
+    const [analysis, setAnalysis] = useState(null);
+    const [signal, setSignal] = useState('green');
+    const [timeframe, setTimeframe] = useState('month');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
 
-    const runAnalysis = async (refresh = false) => {
+    const fetchAnalysis = async (tf = timeframe, forceRefresh = false) => {
         setLoading(true);
+        setError(null);
         try {
-            const res = await API.post('/ai/analyze', { refresh });
-            const { analysis, summary, healthSignal, cached: isCached } = res.data.data;
-            setAnalysis(analysis);
-            setSummary(summary);
-            setHealthSignal(healthSignal || 'green');
-            setCached(isCached);
-            if (isCached) {
-                toast('Showing cached analysis', { icon: '💾' });
-            } else {
-                toast.success('Analysis complete!');
+            const res = await API.post('/ai/analyze', {
+                refresh: forceRefresh
+            });
+            if (res.data?.data) {
+                setAnalysis(res.data.data.analysis);
+                setSignal(res.data.data.healthSignal || 'green');
             }
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Analysis failed. Please try again.');
+            setError(err.response?.data?.message || 'Could not load analysis. Please check your data or try again.');
         } finally {
             setLoading(false);
         }
     };
 
-    return (
-        <div className="analysis-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {/* ── Header ─────────────────────────────────────────────────────── */}
-            <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '1rem' }}>
-                <HiOutlineSparkles style={{ color: '#a78bfa' }} />
-                AI Financial Analysis
-                {cached && <span className="cached-badge">💾 Cached</span>}
-            </h3>
+    useEffect(() => {
+        fetchAnalysis(timeframe);
+    }, [timeframe]);
 
-            {/* ── Empty state ─────────────────────────────────────────────────── */}
-            {!analysis && !loading && (
-                <div className="ai-trigger">
-                    <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>🤖</div>
-                    <p>
-                        Get a personalized financial analysis — your advisor will compare every
-                        spending category against your own historical patterns and tell you exactly
-                        what needs attention.
-                    </p>
-                    <button className="btn btn-primary" onClick={() => runAnalysis()}>
-                        <HiOutlineSparkles /> Analyze My Finances
+    const handleRefresh = () => {
+        fetchAnalysis(timeframe, true);
+        toast.success('Refreshing analysis with latest spending data...');
+    };
+
+    const health = HEALTH_CONFIG[signal] || HEALTH_CONFIG.green;
+
+    return (
+        <div className="card analysis-panel-card" style={{ display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
+            {/* Header — sticky, never scrolls */}
+            <div className="card-header" style={{ paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0, padding: '1rem 1.25rem 0.75rem' }}>
+                <div>
+                    <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <HiOutlineSparkles style={{ color: 'var(--color-primary)' }} />
+                        Spending Diagnosis
+                    </h2>
+                    <p className="card-subtitle">Practical assessment of your real financial habits</p>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <select
+                        value={timeframe}
+                        onChange={(e) => setTimeframe(e.target.value)}
+                        className="form-select"
+                        style={{ minHeight: '36px', padding: '0.2rem 0.5rem', fontSize: '0.8125rem', width: 'auto' }}
+                        aria-label="Select diagnosis timeframe"
+                    >
+                        <option value="month">This Month</option>
+                        <option value="quarter">Last 3 Months</option>
+                        <option value="year">All Time</option>
+                    </select>
+
+                    <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={handleRefresh}
+                        disabled={loading}
+                        title="Re-run analysis"
+                        aria-label="Refresh spending analysis"
+                    >
+                        <HiOutlineArrowPath className={loading ? 'spinner' : ''} aria-hidden="true" />
+                        <span>Refresh</span>
                     </button>
                 </div>
-            )}
+            </div>
 
-            {/* ── Loading ─────────────────────────────────────────────────────── */}
-            {loading && (
-                <div style={{ textAlign: 'center', padding: '2rem' }}>
-                    <div className="spinner" style={{ margin: '0 auto 1rem' }} />
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                        Comparing your spending against historical patterns...
-                    </p>
-                </div>
-            )}
-
-            {/* ── Results ─────────────────────────────────────────────────────── */}
-            {analysis && !loading && (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-                    {/* Traffic light banner */}
-                    {healthSignal && <HealthBanner signal={healthSignal} />}
-
-                    {/* Category delta badges */}
-                    {summary?.deltaMatrix && (
-                        <CategoryBadges deltaMatrix={summary.deltaMatrix} />
-                    )}
-
-                    {/* Micro-leakage warning */}
-                    {summary?.microLeakage && (
-                        <MicroLeakageWarning microLeakage={summary.microLeakage} />
-                    )}
-
-                    {/* AI analysis text */}
-                    <div
-                        className="analysis-content markdown-content custom-scrollbar"
-                        dangerouslySetInnerHTML={{ __html: renderAdvisorMarkdown(analysis) }}
-                        style={{
-                            lineHeight: '1.7',
-                            color:      'var(--text-secondary)',
-                            flex:        1,
-                            overflowY:  'auto',
-                            paddingRight: '12px'
-                        }}
-                    />
-
-                    {/* Re-analyze button */}
-                    <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                        <button className="btn btn-secondary btn-sm" onClick={() => runAnalysis(true)}>
-                            <HiOutlineSparkles /> Re-analyze
+            {/* Content Body — only this region scrolls */}
+            <div style={{ flex: 1, padding: '1rem 1.25rem', overflowY: 'auto', minHeight: 0, WebkitOverflowScrolling: 'touch' }}>
+                {loading ? (
+                    <div>
+                        <div className="loading-skeleton" style={{ height: '40px', marginBottom: '1rem', borderRadius: 'var(--radius-sm)' }} />
+                        <div className="loading-skeleton" style={{ height: '80px', marginBottom: '1rem', borderRadius: 'var(--radius-sm)' }} />
+                        <div className="loading-skeleton" style={{ height: '140px', borderRadius: 'var(--radius-sm)' }} />
+                    </div>
+                ) : error ? (
+                    <div className="empty-state" style={{ padding: '2rem 1rem' }}>
+                        <div className="empty-state-icon">⚠️</div>
+                        <h3>Diagnosis Unavailable</h3>
+                        <p>{error}</p>
+                        <button type="button" className="btn btn-primary btn-sm" onClick={() => fetchAnalysis(timeframe)}>
+                            Try Again
                         </button>
                     </div>
-                </div>
-            )}
+                ) : analysis ? (
+                    <div>
+                        {/* Health Signal Banner */}
+                        <div className={`status-banner ${health.bannerClass}`} style={{ marginBottom: '1.25rem' }}>
+                            <div className="status-banner-text">
+                                <strong>Financial Health Signal:</strong> {health.label}
+                            </div>
+                        </div>
+
+                        {/* Safely Rendered Structured Markdown */}
+                        <AdvisorMarkdown content={analysis} />
+                    </div>
+                ) : (
+                    <div className="empty-state">
+                        <div className="empty-state-icon">💡</div>
+                        <h3>No Analysis Generated Yet</h3>
+                        <p>Click below to generate an AI assessment of your spending and receive personalized next steps.</p>
+                        <button type="button" className="btn btn-primary" onClick={() => fetchAnalysis(timeframe, true)}>
+                            Generate Diagnosis
+                        </button>
+                    </div>
+                )}
+            </div>
         </div>
     );
 };

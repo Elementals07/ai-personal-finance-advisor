@@ -1,254 +1,215 @@
 import { useState } from 'react';
 import { 
-    HiOutlineSparkles, 
-    HiOutlineCube, 
-    HiOutlineChartBar, 
-    HiOutlineFaceSmile,
+    HiOutlineCreditCard, 
+    HiOutlineCamera, 
+    HiOutlineBanknotes, 
+    HiOutlineChartPie, 
+    HiOutlineCircleStack, 
+    HiOutlineSparkles,
     HiOutlineChevronDown,
-    HiOutlineCreditCard,
-    HiOutlineBanknotes,
-    HiOutlinePresentationChartLine,
-    HiOutlineShieldCheck
+    HiOutlineCheck
 } from 'react-icons/hi2';
 
-const AccordionItem = ({ icon, title, description, subFeatures, tips, isOpen, onToggle }) => {
-    return (
-        <div 
-            className={`card ${isOpen ? 'active' : ''}`} 
-            style={{ 
-                marginBottom: '1rem', 
-                padding: 0, 
-                borderRadius: '20px', 
-                overflow: 'hidden',
-                border: isOpen ? '2px solid var(--primary-color)' : '1px solid rgba(0,0,0,0.05)',
-                transition: 'all 0.3s ease',
-                background: 'white'
-            }}
-        >
-            <button 
-                onClick={onToggle}
-                style={{
-                    width: '100%',
-                    padding: '1.5rem 2rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1.5rem',
-                    background: 'none',
-                    border: 'none',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'background 0.2s ease'
-                }}
-            >
-                <div style={{ 
-                    width: '48px', 
-                    height: '48px', 
-                    borderRadius: '14px', 
-                    background: isOpen ? 'var(--primary-color)' : '#f8fafc',
-                    color: isOpen ? 'white' : 'var(--primary-color)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '1.4rem',
-                    transition: 'all 0.3s ease'
-                }}>
-                    {icon}
-                </div>
-                <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</h3>
-                    {!isOpen && <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '400px' }}>{description}</p>}
-                </div>
-                <HiOutlineChevronDown style={{ 
-                    fontSize: '1.2rem', 
-                    color: 'var(--text-muted)', 
-                    transform: isOpen ? 'rotate(180deg)' : 'rotate(0)',
-                    transition: 'transform 0.3s ease'
-                }} />
-            </button>
-
-            {isOpen && (
-                <div style={{ 
-                    padding: '0 2rem 2rem 5.5rem',
-                    animation: 'fadeIn 0.4s ease'
-                }}>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '1rem', lineHeight: 1.7, marginBottom: '1.5rem' }}>
-                        {description}
-                    </p>
-
-                    {subFeatures && subFeatures.length > 0 && (
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <h4 style={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Detailed Features</h4>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                                {subFeatures.map((sf, idx) => (
-                                    <div key={idx} style={{ background: '#f8fafc', padding: '1rem', borderRadius: '12px', border: '1px solid #f1f5f9' }}>
-                                        <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.25rem' }}>{sf.name}</div>
-                                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{sf.desc}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    <div style={{ 
-                        background: 'linear-gradient(to right, #f8fafc, #f1f5f9)', 
-                        padding: '1.5rem', 
-                        borderRadius: '16px', 
-                        border: '1px solid rgba(0,0,0,0.02)' 
-                    }}>
-                        <div style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: '0.5rem', 
-                            marginBottom: '0.75rem',
-                            fontSize: '0.75rem', 
-                            fontWeight: 800, 
-                            color: 'var(--text-muted)', 
-                            textTransform: 'uppercase', 
-                            letterSpacing: '0.1em' 
-                        }}>
-                            💡 Expert Pro Tips
-                        </div>
-                        <ul style={{ margin: 0, paddingLeft: '1.2rem', listStyle: 'none' }}>
-                            {tips.map((tip, j) => (
-                                <li key={j} style={{ 
-                                    marginBottom: '0.5rem', 
-                                    fontSize: '0.9rem', 
-                                    color: 'var(--text-primary)',
-                                    position: 'relative'
-                                }}>
-                                    <span style={{ position: 'absolute', left: '-1.2rem', color: '#94a3b8' }}>•</span>
-                                    {tip}
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
+const GUIDE_SECTIONS = [
+    {
+        id: 'add-expense',
+        icon: <HiOutlineCreditCard aria-hidden="true" />,
+        title: '1. Add an Expense',
+        summary: 'Record money you spent in a matter of seconds.',
+        steps: [
+            'Click the green "Add Expense" button at the top of the Home or Expenses page.',
+            'Type the amount in rupees (e.g. 250).',
+            'Select a category like Food, Travel, or Utilities.',
+            'Select the date (defaults to Today).',
+            'Optionally add a note (e.g. "Lunch with friends") and tap "Save Expense".'
+        ],
+        tip: 'Entering expenses daily keeps your remaining spending buffer completely accurate.'
+    },
+    {
+        id: 'scan-bill',
+        icon: <HiOutlineCamera aria-hidden="true" />,
+        title: '2. Scan a Bill or Receipt',
+        summary: 'Take a picture of a receipt to automatically extract the details.',
+        steps: [
+            'Go to Expenses and click "Scan Bill".',
+            'Choose a receipt photo from your device or take a new picture.',
+            'Wait a few seconds while the reader extracts the merchant name, date, and amount.',
+            'Review the extracted values and make any needed corrections.',
+            'Confirm to save the transaction to your ledger.'
+        ],
+        tip: 'The scanner never saves anything without your explicit confirmation.'
+    },
+    {
+        id: 'budget',
+        icon: <HiOutlineBanknotes aria-hidden="true" />,
+        title: '3. Create a Monthly Budget',
+        summary: 'Set maximum limits for spending categories so you stay within your income.',
+        steps: [
+            'Open the Budget page from the sidebar menu.',
+            'Enter your expected monthly take-home income.',
+            'Assign spending limits for categories (e.g. Food: ₹8,000, Rent: ₹15,000).',
+            'Review the unallocated amount to see how much is left over.',
+            'Click "Save Spending Plan" to save your targets.'
+        ],
+        tip: 'If your planned category limits exceed your monthly income, the app will give you a friendly warning before saving.'
+    },
+    {
+        id: 'dashboard',
+        icon: <HiOutlineChartPie aria-hidden="true" />,
+        title: '4. Understand Your Dashboard',
+        summary: 'See your complete financial picture at a glance.',
+        steps: [
+            'Check "Money Left in Spending Plan" to see how much you have left to spend this month.',
+            'Review the Budget Status banner: "Good" (within plan), "Warning" (near limit), or "Exceeded" (over plan).',
+            'See your top spending category to immediately spot where the most money went.',
+            'Browse your recent expenses and daily spending spikes.'
+        ],
+        tip: 'Your saved balance shows income minus recorded expenses for the month. It is not an actual bank account balance.'
+    },
+    {
+        id: 'savings',
+        icon: <HiOutlineCircleStack aria-hidden="true" />,
+        title: '5. Track Your Savings History',
+        summary: 'See how much money you retained month-over-month.',
+        steps: [
+            'Navigate to "My Savings" in the sidebar.',
+            'View your Total Savings across all months recorded so far.',
+            'Check your Average Monthly Savings run-rate.',
+            'Inspect the monthly comparison chart to see your income versus expenses over time.'
+        ],
+        tip: 'Consistent positive surplus month after month builds long-term financial security.'
+    },
+    {
+        id: 'ai-advisor',
+        icon: <HiOutlineSparkles aria-hidden="true" />,
+        title: '6. Ask the AI Advisor',
+        summary: 'Get personalized, practical guidance grounded in your real numbers.',
+        steps: [
+            'Go to "AI Advisor" in the sidebar.',
+            'Read the Spending Diagnosis panel for a quick health check of your habits.',
+            'In the chat panel, click a suggested question like "Where did my money go?" or "What should I reduce?".',
+            'Read the structured response outlining what happened, why it matters, and next steps.'
+        ],
+        tip: 'The advisor strictly looks at your recorded numbers and never makes assumptions about external accounts.'
+    }
+];
 
 const GuidePage = () => {
-    const [openIndex, setOpenIndex] = useState(0);
+    const [openSection, setOpenSection] = useState('add-expense');
 
-    const features = [
-        {
-            icon: <HiOutlineSparkles />,
-            title: "A - Smart AI Assistant",
-            description: "Deep, data-driven financial insights powered by Google Gemini. Your advisor understands your context securely.",
-            subFeatures: [
-                { name: "Context Selection", desc: "Choose timeframe (Today/Week/Month) for precise analysis." },
-                { name: "Dynamic Querying", desc: "Ask specific questions about any transaction or trend." },
-                { name: "Automated Reports", desc: "AI generates monthly health scores and summaries." }
-            ],
-            tips: ["Ask: 'How much did I spend at Starbucks this month?'", "Use 'Analyze My Finances' for a full breakdown."]
-        },
-        {
-            icon: <HiOutlinePresentationChartLine />,
-            title: "B - Dashboard & Daily Pacing",
-            description: "Real-time visualization of your daily spending habits compared to your long-term averages.",
-            subFeatures: [
-                { name: "Monthly Trends", desc: "60-month historical view of income vs expenses." },
-                { name: "Category Split", desc: "Interactive pie charts showing your sector-wise spending." },
-                { name: "Daily Line Graph", desc: "Track day-by-day spend to catch spikes early." }
-            ],
-            tips: ["Watch the 'Daily Pacing' card to see if you're on track.", "Hover over charts for exact ₹ values."]
-        },
-        {
-            icon: <HiOutlineCreditCard />,
-            title: "C - Transaction Management",
-            description: "Detailed logging and filtering of every rupee you spend or earn.",
-            subFeatures: [
-                { name: "Specific Date Filter", desc: "Jump to any exact date in your 5-year history." },
-                { name: "Dynamic Categories", desc: "Assign every expense to a custom sector." },
-                { name: "Pagination", desc: "Infinite scroll handling for thousands of records." }
-            ],
-            tips: ["Use the search or date filter to find old receipts.", "Deleting a category will move its expenses to 'Others'."]
-        },
-        {
-            icon: <HiOutlineBanknotes />,
-            title: "D - Budgeting & Allocations",
-            description: "Set strict or flexible limits for your categories to prevent overspending before it happens.",
-            subFeatures: [
-                { name: "Income-Based Budget", desc: "Set your central monthly income target." },
-                { name: "Category Pacing", desc: "Red/Green indicators show if you're over category limits." },
-                { name: "Savings Target", desc: "Unallocated income is tracked as your savings goal." }
-            ],
-            tips: ["Check budget progress at least once a week.", "Set small buffers for 'Others' category."]
-        },
-        {
-            icon: <HiOutlineShieldCheck />,
-            title: "E - Category Personalization",
-            description: "Customize the software to match your lifestyle by defining your own spending sectors.",
-            subFeatures: [
-                { name: "Color Palette", desc: "Choose from 25+ distinct, professional colors." },
-                { name: "Custom Naming", desc: "Create sectors like 'Gaming', 'Pet Care', or 'Business'." }
-            ],
-            tips: ["Cooler colors (Blue/Green) for essentials, Warmer (Red/Rose) for luxuries.", "Keep sector names short for better chart display."]
-        },
-        {
-            icon: <HiOutlineChartBar />,
-            title: "F - Savings & Wealth Trends",
-            description: "Monitor your wealth accumulation journey with net accumulation tracking.",
-            subFeatures: [
-                { name: "Savings Rate", desc: "Calculates % efficiency of your monthly surplus." },
-                { name: "Historical Breakdown", desc: "Table view of your net worth growth over years." }
-            ],
-            tips: ["Aim for 'Green' efficiency status (20%+ savings).", "The graph auto-scrolls to show your most recent success."]
-        }
-    ];
+    const toggleSection = (id) => {
+        setOpenSection(prev => prev === id ? null : id);
+    };
 
     return (
-        <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1rem 5rem' }}>
-            {/* Header Section */}
-            <div className="page-header" style={{ textAlign: 'center', marginBottom: '4rem', animation: 'fadeIn 0.6s ease' }}>
-                <div style={{ 
-                    width: '70px', 
-                    height: '70px', 
-                    background: 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))', 
-                    borderRadius: '20px', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center', 
-                    fontSize: '2rem', 
-                    margin: '0 auto 1.5rem',
-                    boxShadow: '0 10px 25px rgba(59, 130, 246, 0.3)',
-                    color: 'white'
-                }}>
-                    <HiOutlineSparkles />
+        <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+            {/* Page Header */}
+            <div className="page-header">
+                <div className="page-tag">
+                    User Guide
                 </div>
-                <h1 style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '1rem', letterSpacing: '-0.02em' }}>
-                    Feature Guide (A to Z)
-                </h1>
-                <p style={{ fontSize: '1.1rem', color: 'var(--text-secondary)', maxWidth: '600px', margin: '0 auto' }}>
-                    Master your financial intelligence with our comprehensive suite of tools. Click on any section below to learn more about its capabilities.
+                <h1 className="page-title">How to Use FinanceAI</h1>
+                <p className="page-subtitle">
+                    Simple, practical step-by-step instructions for everyday tasks.
                 </p>
             </div>
 
-            {/* Accordion Container */}
-            <div style={{ animation: 'slideUp 0.6s ease' }}>
-                {features.map((feature, i) => (
-                    <AccordionItem 
-                        key={i}
-                        {...feature}
-                        isOpen={openIndex === i}
-                        onToggle={() => setOpenIndex(openIndex === i ? -1 : i)}
-                    />
-                ))}
-            </div>
+            {/* Step-by-Step Accordion Sections */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                {GUIDE_SECTIONS.map((sec) => {
+                    const isOpen = openSection === sec.id;
 
-            {/* Footer Tip */}
-            <div style={{ 
-                marginTop: '4rem', 
-                padding: '2rem', 
-                borderRadius: '24px', 
-                background: '#f8fafc', 
-                border: '1px solid #e2e8f0',
-                textAlign: 'center'
-            }}>
-                <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                    Need more help? Check out our <strong>Interactive Tutorials</strong> or ask the <strong>AI Assistant</strong>!
-                </div>
+                    return (
+                        <div 
+                            key={sec.id} 
+                            className="card"
+                            style={{ 
+                                padding: 0,
+                                border: isOpen ? '1px solid var(--color-primary)' : '1px solid var(--border-color)',
+                                overflow: 'hidden'
+                            }}
+                        >
+                            <button
+                                type="button"
+                                onClick={() => toggleSection(sec.id)}
+                                aria-expanded={isOpen}
+                                style={{
+                                    width: '100%',
+                                    padding: '1.25rem 1.5rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '1rem',
+                                    textAlign: 'left',
+                                    backgroundColor: isOpen ? 'var(--color-primary-subtle)' : 'var(--bg-surface)',
+                                    transition: 'background-color var(--transition-fast)'
+                                }}
+                            >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
+                                    <div style={{
+                                        width: '40px',
+                                        height: '40px',
+                                        borderRadius: 'var(--radius-sm)',
+                                        backgroundColor: isOpen ? 'var(--color-primary)' : 'var(--bg-surface-subtle)',
+                                        color: isOpen ? '#FFFFFF' : 'var(--color-primary)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontSize: '1.25rem',
+                                        flexShrink: 0
+                                    }}>
+                                        {sec.icon}
+                                    </div>
+                                    <div>
+                                        <h2 style={{ fontSize: '1.0625rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+                                            {sec.title}
+                                        </h2>
+                                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '0.2rem 0 0' }}>
+                                            {sec.summary}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <HiOutlineChevronDown 
+                                    style={{
+                                        fontSize: '1.25rem',
+                                        color: 'var(--text-secondary)',
+                                        transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                                        transition: 'transform var(--transition-fast)',
+                                        flexShrink: 0
+                                    }}
+                                    aria-hidden="true"
+                                />
+                            </button>
+
+                            {isOpen && (
+                                <div style={{ padding: '1.25rem 1.5rem 1.5rem', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-surface)' }}>
+                                    <div style={{ marginBottom: '1.25rem' }}>
+                                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>
+                                            Steps to follow:
+                                        </div>
+                                        <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
+                                            {sec.steps.map((st, i) => (
+                                                <li key={i} style={{ lineHeight: 1.5 }}>
+                                                    {st}
+                                                </li>
+                                            ))}
+                                        </ol>
+                                    </div>
+
+                                    {sec.tip && (
+                                        <div className="status-banner good" style={{ margin: 0 }}>
+                                            <HiOutlineCheck className="status-banner-icon" aria-hidden="true" />
+                                            <div className="status-banner-text">
+                                                <strong>Helpful Tip:</strong> {sec.tip}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
             </div>
         </div>
     );

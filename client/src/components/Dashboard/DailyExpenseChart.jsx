@@ -13,7 +13,6 @@ import {
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend);
 
 const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
-    // Generate all days for the current month
     const getDaysInMonth = () => {
         if (!currentMonth) return [];
         const [year, month] = currentMonth.split('-').map(Number);
@@ -29,26 +28,27 @@ const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
 
     const allDays = getDaysInMonth();
     
-    // Create map for easy lookup
     const spendingMap = dailySpending.reduce((acc, curr) => {
         acc[curr.day] = curr.total;
         return acc;
     }, {});
 
-    const labels = allDays.map(day => {
-        const d = parseInt(day.split('-')[2]);
-        return d; // Just show day number for better density
-    });
-
+    const labels = allDays.map(day => parseInt(day.split('-')[2], 10));
     const chartData = allDays.map(day => spendingMap[day] || 0);
 
-    if (allDays.length === 0 && dailySpending.length === 0) {
+    if (allDays.length === 0 || dailySpending.length === 0) {
         return (
-            <div className="chart-card">
-                <h3>📆 Daily Expenses</h3>
-                <div className="empty-state" style={{ padding: '2rem 0' }}>
+            <div className="card">
+                <div className="card-header">
+                    <div>
+                        <h2 className="card-title">Daily Spending Pattern</h2>
+                        <p className="card-subtitle">Spending day-by-day this month</p>
+                    </div>
+                </div>
+                <div className="empty-state" style={{ padding: '2.5rem 1rem' }}>
                     <div className="empty-state-icon">📆</div>
-                    <p>No daily spending data yet</p>
+                    <h3>No Daily Expenses Yet</h3>
+                    <p>Transactions will appear here as you log them throughout the month.</p>
                 </div>
             </div>
         );
@@ -57,24 +57,24 @@ const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
     const data = {
         labels,
         datasets: [{
-            label: 'Daily Spending',
+            label: 'Daily Spent',
             data: chartData,
-            borderColor: '#10b981',
+            borderColor: '#0EA5C9',
             backgroundColor: (ctx) => {
-                const gradient = ctx.chart.ctx.createLinearGradient(0, 0, 0, 280);
-                gradient.addColorStop(0, 'rgba(16, 185, 129, 0.18)');
-                gradient.addColorStop(1, 'rgba(16, 185, 129, 0)');
+                const gradient = ctx.chart.ctx.createLinearGradient(0, 0, 0, 240);
+                gradient.addColorStop(0, 'rgba(14, 165, 201, 0.16)');
+                gradient.addColorStop(1, 'rgba(14, 165, 201, 0.01)');
                 return gradient;
             },
             fill: true,
-            tension: 0.3,
-            borderWidth: 2.5,
-            pointRadius: (ctx) => (ctx.raw > 0 ? 4 : 0), // Hide points for zero spending for cleaner look
-            pointBackgroundColor: '#10b981',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
+            tension: 0.25,
+            borderWidth: 2,
+            pointRadius: (ctx) => (ctx.raw > 0 ? 3.5 : 0),
+            pointBackgroundColor: '#0EA5C9',
+            pointBorderColor: '#FFFFFF',
+            pointBorderWidth: 1.5,
             pointHoverRadius: 6,
-            pointHoverBorderWidth: 3
+            pointHoverBorderWidth: 2
         }]
     };
 
@@ -84,70 +84,55 @@ const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
         plugins: {
             legend: { display: false },
             tooltip: {
-                backgroundColor: '#1e293b',
-                titleColor: '#f1f5f9',
-                bodyColor: '#e2e8f0',
-                borderColor: '#334155',
+                backgroundColor: '#252D29',
+                titleColor: '#FFFFFF',
+                bodyColor: '#D6DDFA',
+                borderColor: '#2D3FBF',
                 borderWidth: 1,
-                cornerRadius: 8,
-                padding: 12,
-                titleFont: { family: 'Inter', weight: '600' },
-                bodyFont: { family: 'Inter' },
+                cornerRadius: 6,
+                padding: 10,
+                titleFont: { family: '"DM Sans", sans-serif', weight: '600' },
+                bodyFont: { family: '"DM Sans", sans-serif' },
                 callbacks: {
-                    title: (ctx) => `Day ${ctx[0].label} of Month`,
-                    label: (ctx) => ` ₹${ctx.parsed.y.toLocaleString('en-IN')}`
+                    title: (ctx) => `Day ${ctx[0].label}`,
+                    label: (ctx) => ` Spent: ₹${ctx.parsed.y.toLocaleString('en-IN')}`
                 }
             }
         },
         scales: {
             x: {
-                grid: { color: '#f1f5f9', drawBorder: false },
+                grid: { display: false },
                 ticks: {
-                    color: '#64748b',
-                    font: { family: 'Inter', size: 10 },
-                    autoSkip: true,
-                    maxTicksLimit: 15
-                },
-                title: {
-                    display: true,
-                    text: 'Day of Month',
-                    font: { family: 'Inter', size: 10, weight: '600' },
-                    color: 'var(--text-muted)'
+                    color: '#69736C',
+                    font: { family: '"DM Sans", sans-serif', size: 11 },
+                    maxTicksLimit: 16
                 }
             },
             y: {
-                grid: { color: '#f1f5f9', drawBorder: false },
+                grid: { color: '#E2DFD6' },
                 ticks: {
-                    color: '#64748b',
-                    font: { family: 'Inter', size: 11 },
-                    callback: (val) => '₹' + (val >= 1000 ? (val / 1000) + 'k' : val)
-                },
-                beginAtZero: true
+                    color: '#69736C',
+                    font: { family: '"DM Sans", sans-serif', size: 12 },
+                    callback: (v) => '₹' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)
+                }
             }
         }
     };
 
     return (
-        <div className="chart-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                <h3 style={{ margin: 0 }}>📆 Daily Expenses</h3>
-                {currentMonth && (
-                    <span style={{ 
-                        fontSize: '0.85rem', 
-                        fontWeight: 700, 
-                        color: 'var(--text-muted)',
-                        background: '#f1f5f9',
-                        padding: '0.2rem 0.75rem',
-                        borderRadius: '8px',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.02em'
-                    }}>
-                        {new Date(currentMonth + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
-                    </span>
-                )}
+        <div className="card">
+            {/* Heading stays fixed above the scrollable chart area */}
+            <div className="card-header">
+                <div>
+                    <h2 className="card-title">Daily Spending Pattern</h2>
+                    <p className="card-subtitle">Day-by-day spending spikes and activity</p>
+                </div>
             </div>
-            <div className="chart-container">
-                <Line data={data} options={options} />
+            {/* Horizontally scrollable on narrow screens — heading stays above */}
+            <div className="chart-scroll-x" style={{ marginTop: '0.5rem' }}>
+                <div style={{ minWidth: `${Math.max(320, labels.length * 22)}px`, height: '240px', position: 'relative' }}>
+                    <Line data={data} options={options} />
+                </div>
             </div>
         </div>
     );

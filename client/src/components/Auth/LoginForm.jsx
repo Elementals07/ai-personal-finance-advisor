@@ -6,6 +6,8 @@ import {
     HiOutlineLockClosed,
     HiOutlineEye,
     HiOutlineEyeSlash,
+    HiOutlineSparkles,
+    HiOutlineUser
 } from 'react-icons/hi2';
 import toast from 'react-hot-toast';
 
@@ -17,175 +19,171 @@ const LoginForm = () => {
     const [password, setPassword] = useState('');
     const [showPass, setShowPass] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [demoLoading, setDemoLoading] = useState(false);
+    const [errorMsg, setErrorMsg] = useState('');
     const { login } = useAuth();
     const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!email || !password) {
-            toast.error('Please fill in all fields');
+        setErrorMsg('');
+        if (!email.trim() || !password) {
+            setErrorMsg('Please enter both email and password.');
             return;
         }
         setLoading(true);
         try {
-            await login(email, password);
+            await login(email.trim(), password);
             toast.success('Welcome back!');
             navigate('/');
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Login failed');
+            const msg = err.response?.data?.message || 'Invalid email or password. Please try again.';
+            setErrorMsg(msg);
+            toast.error(msg);
         } finally {
             setLoading(false);
         }
     };
 
     const handleDemoLogin = async () => {
-        setLoading(true);
+        setErrorMsg('');
+        setDemoLoading(true);
         try {
             await login(DEMO_EMAIL, DEMO_PASS);
-            toast.success('Logged in as demo user 🎉');
+            toast.success('Logged in as demo user');
             navigate('/');
         } catch (err) {
+            setErrorMsg('Demo account login failed. You can create a new account below.');
             toast.error('Demo login failed');
         } finally {
-            setLoading(false);
+            setDemoLoading(false);
         }
     };
 
     return (
-        <div className="auth-page auth-split">
-            {/* ── Left Hero Panel ── */}
-            <div className="auth-left-panel">
-                <div className="auth-hero-content">
-                    <div className="auth-hero-logo">
-                        <div className="auth-hero-logo-icon">💎</div>
-                        <div>
-                            <h1>FinanceAI</h1>
-                            <span>AI Financial Advisor</span>
-                        </div>
+        <div className="auth-container">
+            <div className="auth-card">
+                {/* Brand Header */}
+                <div className="auth-header">
+                    <div className="auth-logo-badge" aria-hidden="true">
+                        <HiOutlineSparkles />
                     </div>
-
-                    <div className="auth-hero-headline">
-                        Your money,<br />
-                        <span>intelligently managed</span>
-                    </div>
-
-                    <p className="auth-hero-subtitle">
-                        Get AI-powered insights on your spending patterns, detect leakages,
-                        and build wealth — all in one place.
-                    </p>
-
-                    <div className="auth-hero-stats">
-                        <div className="auth-hero-stat">
-                            <div className="auth-hero-stat-value">₹2L+</div>
-                            <div className="auth-hero-stat-label">Avg savings tracked</div>
-                        </div>
-                        <div className="auth-hero-stat">
-                            <div className="auth-hero-stat-value">7</div>
-                            <div className="auth-hero-stat-label">AI tools live</div>
-                        </div>
-                        <div className="auth-hero-stat">
-                            <div className="auth-hero-stat-value">100%</div>
-                            <div className="auth-hero-stat-label">Private &amp; secure</div>
-                        </div>
-                    </div>
-
-                    {/* Decorative floating cards */}
-                    <div className="auth-hero-float auth-hero-float--1">
-                        <span>📈</span> Portfolio up 12% this month
-                    </div>
-                    <div className="auth-hero-float auth-hero-float--2">
-                        <span>🤖</span> AI insight ready
-                    </div>
+                    <h1 className="auth-title">FinanceAI</h1>
+                    <p className="auth-subtitle">Sign in to your everyday ledger</p>
                 </div>
-            </div>
 
-            {/* ── Right Form Panel ── */}
-            <div className="auth-right-panel">
-                <div className="auth-container">
-                    <div className="auth-card auth-card--flat">
-                        <div className="auth-header">
-                            <div className="auth-logo">
-                                <div className="auth-logo-icon">💎</div>
-                                <span className="auth-logo-text">FinanceAI</span>
-                            </div>
-                            <h1>Welcome back</h1>
-                            <p>Sign in to your financial dashboard</p>
+                {/* One-click Demo Login box */}
+                <div className="auth-demo-box">
+                    <div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                            Explore with Demo Account
                         </div>
-
-                        {/* Demo Login */}
-                        <button
-                            type="button"
-                            className="auth-demo-btn"
-                            onClick={handleDemoLogin}
-                            disabled={loading}
-                        >
-                            <span>🎯</span>
-                            Try Demo Account — no signup needed
-                        </button>
-
-                        <div className="auth-divider">
-                            <span>or sign in with your account</span>
-                        </div>
-
-                        <form className="auth-form" onSubmit={handleSubmit}>
-                            <div className="form-group">
-                                <label htmlFor="login-email">Email Address</label>
-                                <div className="input-with-icon">
-                                    <span className="input-icon">
-                                        <HiOutlineEnvelope />
-                                    </span>
-                                    <input
-                                        id="login-email"
-                                        type="email"
-                                        placeholder="you@example.com"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        autoComplete="email"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="form-group">
-                                <label htmlFor="login-password">Password</label>
-                                <div className="input-with-icon input-with-icon--toggle">
-                                    <span className="input-icon">
-                                        <HiOutlineLockClosed />
-                                    </span>
-                                    <input
-                                        id="login-password"
-                                        type={showPass ? 'text' : 'password'}
-                                        placeholder="Enter your password"
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        autoComplete="current-password"
-                                    />
-                                    <button
-                                        type="button"
-                                        className="input-toggle-btn"
-                                        onClick={() => setShowPass((p) => !p)}
-                                        aria-label={showPass ? 'Hide password' : 'Show password'}
-                                    >
-                                        {showPass ? <HiOutlineEyeSlash /> : <HiOutlineEye />}
-                                    </button>
-                                </div>
-                            </div>
-
-                            <button
-                                type="submit"
-                                className="btn btn-primary auth-submit-btn"
-                                disabled={loading}
-                            >
-                                {loading
-                                    ? <span className="spinner" style={{ width: '18px', height: '18px' }} />
-                                    : 'Sign In'}
-                            </button>
-                        </form>
-
-                        <div className="auth-footer">
-                            Don't have an account?{' '}
-                            <Link to="/register">Create one free</Link>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            Preloaded with sample expenses and budgets
                         </div>
                     </div>
+                    <button
+                        type="button"
+                        onClick={handleDemoLogin}
+                        disabled={demoLoading || loading}
+                        className="btn btn-secondary btn-sm"
+                        style={{ flexShrink: 0 }}
+                    >
+                        {demoLoading ? 'Signing in...' : 'Try Demo'}
+                    </button>
+                </div>
+
+                <div className="auth-divider">
+                    <span>or sign in with email</span>
+                </div>
+
+                {/* Inline Error Message */}
+                {errorMsg && (
+                    <div className="status-banner danger" style={{ marginBottom: '1.25rem' }} role="alert">
+                        <div className="status-banner-text">{errorMsg}</div>
+                    </div>
+                )}
+
+                {/* Sign-In Form */}
+                <form onSubmit={handleSubmit}>
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                        <label htmlFor="login-email" className="form-label">
+                            Email address
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                            <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', display: 'flex' }}>
+                                <HiOutlineEnvelope aria-hidden="true" />
+                            </span>
+                            <input
+                                id="login-email"
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                placeholder="name@example.com"
+                                className="form-input"
+                                style={{ paddingLeft: '2.5rem' }}
+                                autoComplete="email"
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                        <label htmlFor="login-password" className="form-label">
+                            Password
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                            <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', display: 'flex' }}>
+                                <HiOutlineLockClosed aria-hidden="true" />
+                            </span>
+                            <input
+                                id="login-password"
+                                type={showPass ? 'text' : 'password'}
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                placeholder="Enter your password"
+                                className="form-input"
+                                style={{ paddingLeft: '2.5rem', paddingRight: '2.75rem' }}
+                                autoComplete="current-password"
+                                required
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPass(s => !s)}
+                                aria-label={showPass ? 'Hide password' : 'Show password'}
+                                style={{
+                                    position: 'absolute',
+                                    right: '8px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    padding: '6px',
+                                    color: 'var(--text-secondary)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
+                                }}
+                            >
+                                {showPass ? <HiOutlineEyeSlash aria-hidden="true" /> : <HiOutlineEye aria-hidden="true" />}
+                            </button>
+                        </div>
+                    </div>
+
+                    <button
+                        type="submit"
+                        className="btn btn-primary btn-lg"
+                        disabled={loading || demoLoading}
+                        style={{ width: '100%', marginBottom: '1.25rem' }}
+                    >
+                        {loading ? 'Signing in...' : 'Sign In'}
+                    </button>
+                </form>
+
+                {/* Footer Switcher */}
+                <div style={{ textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                    Don&apos;t have an account?{' '}
+                    <Link to="/register" style={{ fontWeight: 600, color: 'var(--color-primary)' }}>
+                        Create one here
+                    </Link>
                 </div>
             </div>
         </div>

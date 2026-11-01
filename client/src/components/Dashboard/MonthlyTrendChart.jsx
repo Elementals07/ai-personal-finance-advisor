@@ -24,11 +24,17 @@ const MonthlyTrendChart = ({ trends = [] }) => {
 
     if (trends.length === 0) {
         return (
-            <div className="chart-card">
-                <h3>📈 Monthly Spending Trend</h3>
-                <div className="empty-state" style={{ padding: '2rem 0' }}>
+            <div className="card">
+                <div className="card-header">
+                    <div>
+                        <h2 className="card-title">Spending Over Time</h2>
+                        <p className="card-subtitle">Monthly spending history</p>
+                    </div>
+                </div>
+                <div className="empty-state" style={{ padding: '2.5rem 1rem' }}>
                     <div className="empty-state-icon">📈</div>
-                    <p>Not enough data for trends</p>
+                    <h3>No Trend Data Yet</h3>
+                    <p>Track your spending over multiple months to see your long-term pattern.</p>
                 </div>
             </div>
         );
@@ -39,9 +45,7 @@ const MonthlyTrendChart = ({ trends = [] }) => {
     
     const labels = trends.map(t => {
         const [y, m] = t.month.split('-');
-        const monthName = monthNames[parseInt(m) - 1];
-        
-        // Show year only if it changes or it is the first label
+        const monthName = monthNames[parseInt(m, 10) - 1];
         if (y !== lastYear) {
             lastYear = y;
             return `${monthName} ${y}`;
@@ -52,24 +56,24 @@ const MonthlyTrendChart = ({ trends = [] }) => {
     const data = {
         labels,
         datasets: [{
-            label: 'Spending',
+            label: 'Monthly Spending',
             data: trends.map(t => t.total),
-            borderColor: '#3b82f6',
+            borderColor: '#2D3FBF',
             backgroundColor: (ctx) => {
-                const gradient = ctx.chart.ctx.createLinearGradient(0, 0, 0, 280);
-                gradient.addColorStop(0, 'rgba(59, 130, 246, 0.2)');
-                gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
+                const gradient = ctx.chart.ctx.createLinearGradient(0, 0, 0, 240);
+                gradient.addColorStop(0, 'rgba(45, 63, 191, 0.15)');
+                gradient.addColorStop(1, 'rgba(45, 63, 191, 0.01)');
                 return gradient;
             },
             fill: true,
-            tension: 0.4,
-            borderWidth: 2.5,
-            pointRadius: 5,
-            pointBackgroundColor: '#3b82f6',
-            pointBorderColor: '#ffffff',
+            tension: 0.3,
+            borderWidth: 2,
+            pointRadius: 4,
+            pointBackgroundColor: '#2D3FBF',
+            pointBorderColor: '#FFFFFF',
             pointBorderWidth: 2,
-            pointHoverRadius: 7,
-            pointHoverBorderWidth: 3
+            pointHoverRadius: 6,
+            pointHoverBorderWidth: 2
         }]
     };
 
@@ -79,62 +83,58 @@ const MonthlyTrendChart = ({ trends = [] }) => {
         plugins: {
             legend: { display: false },
             tooltip: {
-                backgroundColor: '#1e293b',
-                titleColor: '#f1f5f9',
-                bodyColor: '#e2e8f0',
-                borderColor: '#334155',
+                backgroundColor: '#252D29',
+                titleColor: '#FFFFFF',
+                bodyColor: '#D6DDFA',
+                borderColor: '#2D3FBF',
                 borderWidth: 1,
-                cornerRadius: 8,
-                padding: 12,
-                titleFont: { family: 'Inter', weight: '600' },
-                bodyFont: { family: 'Inter' },
+                cornerRadius: 6,
+                padding: 10,
+                titleFont: { family: '"DM Sans", sans-serif', weight: '600' },
+                bodyFont: { family: '"DM Sans", sans-serif' },
                 callbacks: {
-                    label: (ctx) => ` ₹${ctx.parsed.y.toLocaleString('en-IN')}`
+                    label: (ctx) => ` Spent: ₹${ctx.parsed.y.toLocaleString('en-IN')}`
                 }
             }
         },
         scales: {
             x: {
-                grid: { color: '#f1f5f9', drawBorder: false },
-                ticks: { 
-                    color: '#64748b', 
-                    font: { family: 'Inter', size: 11 },
-                    maxRotation: 0,
-                    autoSkip: false // Don't skip labels when scrolling is enabled
+                grid: { display: false },
+                ticks: {
+                    color: '#69736C',
+                    font: { family: '"DM Sans", sans-serif', size: 12 }
                 }
             },
             y: {
-                grid: { color: '#f1f5f9', drawBorder: false },
+                grid: { color: '#E2DFD6' },
                 ticks: {
-                    color: '#64748b',
-                    font: { family: 'Inter', size: 11 },
-                    callback: (val) => '₹' + (val >= 1000 ? (val / 1000) + 'k' : val)
+                    color: '#69736C',
+                    font: { family: '"DM Sans", sans-serif', size: 12 },
+                    callback: (v) => '₹' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)
                 }
             }
         }
     };
 
-    // Calculate dynamic width to trigger scrolling
-    // Roughly 80px per month point
-    const minWidth = Math.max(100, trends.length * 80);
-
     return (
-        <div className="chart-card">
-            <h3 style={{ marginBottom: '1.5rem' }}>📈 Monthly Spending Trend</h3>
-            <div 
-                className="chart-scroll-container" 
+        <div className="card">
+            {/* Heading stays fixed above the scrollable chart area */}
+            <div className="card-header">
+                <div>
+                    <h2 className="card-title">Spending Over Time</h2>
+                    <p className="card-subtitle">Month-by-month spending trajectory</p>
+                </div>
+            </div>
+            {/* Horizontally scrollable — auto-scrolls to the most recent month */}
+            <div
                 ref={scrollRef}
-                style={{ overflowX: 'auto', overflowY: 'hidden', paddingBottom: '10px' }}
+                className="chart-scroll-x"
+                style={{ marginTop: '0.5rem' }}
             >
-                <div style={{ minWidth: `${minWidth}px`, height: '280px' }}>
+                <div style={{ minWidth: `${Math.max(320, trends.length * 60)}px`, height: '240px', position: 'relative' }}>
                     <Line data={data} options={options} />
                 </div>
             </div>
-            {trends.length > 6 && (
-                <div style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                    ← Scroll to see history →
-                </div>
-            )}
         </div>
     );
 };

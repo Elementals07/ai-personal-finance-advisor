@@ -2,25 +2,30 @@ import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { 
-    HiOutlineChartPie, 
+    HiOutlineHome, 
     HiOutlineCreditCard, 
     HiOutlineBanknotes,
-    HiOutlineCpuChip,
+    HiOutlineSparkles,
     HiOutlineArrowRightOnRectangle,
     HiOutlineCircleStack,
-    HiOutlineQueueList,
+    HiOutlineTag,
     HiOutlineQuestionMarkCircle,
     HiOutlineChevronLeft,
     HiOutlineChevronRight,
-    HiOutlineSparkles
+    HiOutlineXMark
 } from 'react-icons/hi2';
 
 const Sidebar = ({ mobileOpen, onCloseMobile }) => {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
+
+    // Default to open (not collapsed) on desktop as per UX guidelines
     const [collapsed, setCollapsed] = useState(() => {
-        try { return localStorage.getItem('sidebar-collapsed') === 'true'; } 
-        catch { return false; }
+        try { 
+            return localStorage.getItem('sidebar-collapsed') === 'true'; 
+        } catch { 
+            return false; 
+        }
     });
 
     useEffect(() => {
@@ -32,6 +37,17 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
         window.dispatchEvent(new CustomEvent('sidebarToggle', { detail: { collapsed } }));
     }, [collapsed]);
 
+    // Handle Escape key on mobile to close drawer
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape' && mobileOpen) {
+                onCloseMobile();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [mobileOpen, onCloseMobile]);
+
     const handleLogout = () => { 
         logout(); 
         navigate('/login'); 
@@ -42,65 +58,74 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
         return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
     };
 
+    // Public navigation items matching Everyday Ledger guidelines
     const navSections = [
         { 
-            section: 'Overview', 
+            section: 'Daily Finances', 
             items: [
-                { to: '/', end: true, icon: <HiOutlineChartPie />, label: 'Dashboard' },
-                { to: '/savings', icon: <HiOutlineCircleStack />, label: 'Savings History' },
+                { to: '/', end: true, icon: <HiOutlineHome aria-hidden="true" />, label: 'Home' },
+                { to: '/expenses', icon: <HiOutlineCreditCard aria-hidden="true" />, label: 'Expenses' },
+                { to: '/budget', icon: <HiOutlineBanknotes aria-hidden="true" />, label: 'Budget' },
             ]
         },
         { 
-            section: 'Manage', 
+            section: 'Planning & Insights', 
             items: [
-                { to: '/expenses', icon: <HiOutlineCreditCard />, label: 'Expenses' },
-                { to: '/budget', icon: <HiOutlineBanknotes />, label: 'Budget' },
-                { to: '/sectors', icon: <HiOutlineQueueList />, label: 'Categories' },
-            ]
-        },
-        { 
-            section: 'Intelligence', 
-            items: [
-                { to: '/ai-insights', icon: <HiOutlineCpuChip />, label: 'AI Insights', badge: 'PRO' },
-                { to: '/guide', icon: <HiOutlineQuestionMarkCircle />, label: 'System Guide' },
+                { to: '/savings', icon: <HiOutlineCircleStack aria-hidden="true" />, label: 'My Savings' },
+                { to: '/sectors', icon: <HiOutlineTag aria-hidden="true" />, label: 'Categories' },
+                { to: '/ai-insights', icon: <HiOutlineSparkles aria-hidden="true" />, label: 'AI Advisor' },
+                { to: '/guide', icon: <HiOutlineQuestionMarkCircle aria-hidden="true" />, label: 'How to Use' },
             ]
         },
     ];
 
     return (
-        <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
+        <aside 
+            className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}
+            aria-label="Main Navigation"
+        >
             {/* Brand Header */}
             <div className="sidebar-header">
                 <div className="sidebar-brand">
-                    <div className="sidebar-brand-icon">
-                        <HiOutlineSparkles style={{ fontSize: '1.35rem', color: '#ffffff' }} />
+                    <div className="sidebar-brand-icon" aria-hidden="true">
+                        <HiOutlineSparkles />
                     </div>
                     {!collapsed && (
                         <div className="sidebar-brand-text">
                             <h2>FinanceAI</h2>
-                            <span>Autonomous Advisor</span>
+                            <span>Everyday Ledger</span>
                         </div>
                     )}
                 </div>
                 
-                {/* Collapse / Expand Toggle for desktop */}
+                {/* Desktop Collapse / Expand Toggle */}
                 <button 
                     type="button"
                     className="sidebar-collapse-btn"
                     onClick={() => setCollapsed(c => !c)}
-                    title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                    aria-label="Toggle Sidebar"
+                    title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+                    aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
                 >
-                    {collapsed ? <HiOutlineChevronRight /> : <HiOutlineChevronLeft />}
+                    {collapsed ? <HiOutlineChevronRight aria-hidden="true" /> : <HiOutlineChevronLeft aria-hidden="true" />}
+                </button>
+
+                {/* Mobile Drawer Close Button */}
+                <button
+                    type="button"
+                    className="sidebar-mobile-close"
+                    onClick={onCloseMobile}
+                    aria-label="Close navigation menu"
+                >
+                    <HiOutlineXMark aria-hidden="true" />
                 </button>
             </div>
 
-            {/* Navigation */}
+            {/* Navigation links */}
             <nav className="sidebar-nav">
                 {navSections.map(({ section, items }) => (
-                    <div key={section} style={{ marginBottom: '0.4rem' }}>
-                        <div className="sidebar-section-title">{section}</div>
-                        {items.map(({ to, end, icon, label, badge }) => (
+                    <div key={section} style={{ marginBottom: '0.5rem' }}>
+                        {!collapsed && <div className="sidebar-section-title">{section}</div>}
+                        {items.map(({ to, end, icon, label }) => (
                             <NavLink
                                 key={to}
                                 to={to}
@@ -108,24 +133,10 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
                                 onClick={onCloseMobile}
                                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                                 title={collapsed ? label : undefined}
+                                aria-label={label}
                             >
                                 <span className="nav-icon">{icon}</span>
-                                <span className="nav-item-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                                    <span>{label}</span>
-                                    {badge && !collapsed && (
-                                        <span style={{ 
-                                            fontSize: '0.62rem', 
-                                            fontWeight: 800, 
-                                            padding: '0.15rem 0.45rem', 
-                                            borderRadius: '6px', 
-                                            background: 'linear-gradient(135deg, #6366f1, #3b82f6)',
-                                            color: '#ffffff',
-                                            letterSpacing: '0.05em'
-                                        }}>
-                                            {badge}
-                                        </span>
-                                    )}
-                                </span>
+                                {!collapsed && <span className="nav-item-label">{label}</span>}
                             </NavLink>
                         ))}
                     </div>
@@ -134,28 +145,38 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
 
             {/* User Footer */}
             <div className="sidebar-footer">
-                <div className="sidebar-user" title={collapsed ? `${user?.name || 'User'} (${user?.email || ''})` : undefined}>
-                    <div className="sidebar-avatar">
+                <div className="sidebar-user" title={collapsed ? `${user?.name || 'Account'} (${user?.email || ''})` : undefined}>
+                    <div className="sidebar-avatar" aria-hidden="true">
                         {getInitials(user?.name)}
                     </div>
-                    <div className="sidebar-user-info">
-                        <div className="sidebar-user-name">{user?.name || 'User'}</div>
-                        <div className="sidebar-user-email">{user?.email || ''}</div>
-                    </div>
                     {!collapsed && (
-                        <button className="btn-logout" onClick={handleLogout} title="Sign Out">
-                            <HiOutlineArrowRightOnRectangle />
-                        </button>
+                        <>
+                            <div className="sidebar-user-info">
+                                <div className="sidebar-user-name">{user?.name || 'My Account'}</div>
+                                <div className="sidebar-user-email">{user?.email || ''}</div>
+                            </div>
+                            <button 
+                                type="button"
+                                className="btn-logout" 
+                                onClick={handleLogout} 
+                                title="Sign out of account"
+                                aria-label="Sign out"
+                            >
+                                <HiOutlineArrowRightOnRectangle aria-hidden="true" />
+                            </button>
+                        </>
                     )}
                 </div>
                 {collapsed && (
                     <button 
+                        type="button"
                         className="btn-logout" 
                         onClick={handleLogout} 
-                        title="Sign Out" 
-                        style={{ width: '100%', justifyContent: 'center', marginTop: '0.4rem' }}
+                        title="Sign out of account" 
+                        aria-label="Sign out"
+                        style={{ width: '100%', marginTop: '0.35rem' }}
                     >
-                        <HiOutlineArrowRightOnRectangle />
+                        <HiOutlineArrowRightOnRectangle aria-hidden="true" />
                     </button>
                 )}
             </div>

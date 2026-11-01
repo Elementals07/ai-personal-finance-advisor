@@ -23,9 +23,10 @@ const ProtectedRoute = ({ children }) => {
                 minHeight: '100vh', 
                 display: 'flex', 
                 alignItems: 'center', 
-                justifyContent: 'center' 
+                justifyContent: 'center',
+                backgroundColor: 'var(--bg-primary, #F5F7FF)'
             }}>
-                <div className="spinner" style={{ width: '40px', height: '40px' }} />
+                <div className="spinner" aria-label="Loading..." />
             </div>
         );
     }
@@ -43,9 +44,10 @@ const PublicRoute = ({ children }) => {
                 minHeight: '100vh', 
                 display: 'flex', 
                 alignItems: 'center', 
-                justifyContent: 'center' 
+                justifyContent: 'center',
+                backgroundColor: 'var(--bg-primary, #F5F7FF)'
             }}>
-                <div className="spinner" style={{ width: '40px', height: '40px' }} />
+                <div className="spinner" aria-label="Loading..." />
             </div>
         );
     }
@@ -60,21 +62,22 @@ function App() {
                 <Toaster
                     position="top-right"
                     toastOptions={{
-                        duration: 3000,
+                        duration: 3200,
                         style: {
-                            background: '#ffffff',
-                            color: '#1e293b',
-                            border: '1px solid #e2e8f0',
-                            borderRadius: '12px',
-                            fontSize: '0.9rem',
-                            fontFamily: 'Inter, sans-serif',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
+                            background: '#FFFFFF',
+                            color: '#111827',
+                            border: '1px solid #DDE2F0',
+                            borderRadius: '8px',
+                            fontSize: '0.92rem',
+                            fontFamily: '"DM Sans", -apple-system, BlinkMacSystemFont, sans-serif',
+                            boxShadow: '0 4px 16px rgba(37, 45, 41, 0.08)',
+                            padding: '12px 16px'
                         },
                         success: {
-                            iconTheme: { primary: '#10b981', secondary: '#ffffff' }
+                            iconTheme: { primary: '#2D3FBF', secondary: '#FFFFFF' }
                         },
                         error: {
-                            iconTheme: { primary: '#ef4444', secondary: '#ffffff' }
+                            iconTheme: { primary: '#DC2626', secondary: '#FFFFFF' }
                         }
                     }}
                 />
@@ -83,14 +86,18 @@ function App() {
                     <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
                     <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
 
-                    {/* Protected Routes */}
+                    {/* Protected Routes inside Global Layout */}
                     <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
                         <Route index element={<DashboardPage />} />
                         <Route path="expenses" element={<ExpensesPage />} />
                         <Route path="budget" element={<BudgetPage />} />
+                        {/* Both /sectors (legacy bookmark) and /categories supported */}
                         <Route path="sectors" element={<CategoriesPage />} />
+                        <Route path="categories" element={<CategoriesPage />} />
                         <Route path="savings" element={<SavingsPage />} />
+                        {/* Both /ai-insights and /ai-advisor supported */}
                         <Route path="ai-insights" element={<AIInsightsPage />} />
+                        <Route path="ai-advisor" element={<AIInsightsPage />} />
                         <Route path="guide" element={<GuidePage />} />
                     </Route>
 

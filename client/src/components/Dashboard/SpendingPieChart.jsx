@@ -9,59 +9,66 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
 
     if (categoryBreakdown.length === 0) {
         return (
-            <div className="chart-card">
-                <h3>📊 Category Breakdown</h3>
-                <div className="empty-state" style={{ padding: '2rem 0' }}>
+            <div className="card">
+                <div className="card-header">
+                    <div>
+                        <h2 className="card-title">Where Your Money Went</h2>
+                        <p className="card-subtitle">Spending breakdown by category</p>
+                    </div>
+                </div>
+                <div className="empty-state" style={{ padding: '2.5rem 1rem' }}>
                     <div className="empty-state-icon">📊</div>
-                    <p>No spending data yet</p>
+                    <h3>No Expenses Recorded Yet</h3>
+                    <p>Add your first expense to see your category breakdown.</p>
                 </div>
             </div>
         );
     }
 
+    const totalSpending = categoryBreakdown.reduce((sum, c) => sum + c.total, 0);
+
     const data = {
         labels: categoryBreakdown.map(c => c.category),
         datasets: [{
             data: categoryBreakdown.map(c => c.total),
-            backgroundColor: categoryBreakdown.map(c => colorMap[c.category] || '#64748b'),
-            borderColor: '#ffffff',
+            backgroundColor: categoryBreakdown.map(c => colorMap[c.category] || '#69736C'),
+            borderColor: '#FFFFFF',
             borderWidth: 2,
-            hoverOffset: 8,
+            hoverOffset: 6,
             spacing: 2,
-            borderRadius: 4
+            borderRadius: 3
         }]
     };
 
     const options = {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: '62%',
+        cutout: '64%',
         plugins: {
             legend: {
                 position: 'right',
                 labels: {
-                    color: '#475569',
-                    font: { family: 'Inter', size: 12, weight: '500' },
+                    color: '#252D29',
+                    font: { family: '"DM Sans", sans-serif', size: 13, weight: '500' },
                     padding: 12,
                     usePointStyle: true,
                     pointStyleWidth: 10
                 }
             },
             tooltip: {
-                backgroundColor: '#1e293b',
-                titleColor: '#f1f5f9',
-                bodyColor: '#e2e8f0',
-                borderColor: '#334155',
+                backgroundColor: '#252D29',
+                titleColor: '#FFFFFF',
+                bodyColor: '#D6DDFA',
+                borderColor: '#2D3FBF',
                 borderWidth: 1,
-                cornerRadius: 8,
-                padding: 12,
-                titleFont: { family: 'Inter', weight: '600' },
-                bodyFont: { family: 'Inter' },
+                cornerRadius: 6,
+                padding: 10,
+                titleFont: { family: '"DM Sans", sans-serif', weight: '600' },
+                bodyFont: { family: '"DM Sans", sans-serif' },
                 callbacks: {
                     label: (ctx) => {
                         const value = ctx.parsed;
-                        const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                        const pct = Math.round((value / total) * 100);
+                        const pct = totalSpending > 0 ? Math.round((value / totalSpending) * 100) : 0;
                         return ` ₹${value.toLocaleString('en-IN')} (${pct}%)`;
                     }
                 }
@@ -70,10 +77,28 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
     };
 
     return (
-        <div className="chart-card">
-            <h3>📊 Category Breakdown</h3>
-            <div className="chart-container">
+        <div className="card">
+            <div className="card-header">
+                <div>
+                    <h2 className="card-title">Where Your Money Went</h2>
+                    <p className="card-subtitle">Spending breakdown by category this month</p>
+                </div>
+            </div>
+            {/* Chart area — responsive height, no overflow clipping */}
+            <div style={{ position: 'relative', width: '100%', height: '260px', marginTop: '0.5rem' }}>
                 <Doughnut data={data} options={options} />
+            </div>
+
+            {/* Accessible screen-reader & visual summary list */}
+            <div className="sr-only">
+                <h4>Category Breakdown Summary</h4>
+                <ul>
+                    {categoryBreakdown.map(c => (
+                        <li key={c.category}>
+                            {c.category}: ₹{c.total.toLocaleString('en-IN')} ({totalSpending > 0 ? Math.round((c.total / totalSpending) * 100) : 0}%)
+                        </li>
+                    ))}
+                </ul>
             </div>
         </div>
     );

@@ -1,8 +1,16 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import API from '../../api/axios';
 import toast from 'react-hot-toast';
 import { useCategories } from '../../hooks/useCategories';
-import { HiOutlineCamera, HiOutlineArrowPath, HiOutlineCheck, HiOutlineXMark } from 'react-icons/hi2';
+import { 
+    HiOutlineCamera, 
+    HiOutlineArrowPath, 
+    HiOutlineCheck, 
+    HiOutlineXMark,
+    HiOutlineDocumentText,
+    HiOutlinePlus,
+    HiOutlineTrash
+} from 'react-icons/hi2';
 
 const BillScannerModal = ({ onClose, onSuccess }) => {
     const { categoryNames } = useCategories();
@@ -10,32 +18,41 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
 
     const [imagePreview, setImagePreview] = useState(null);
     const [mimeType, setMimeType] = useState('image/jpeg');
-    const [base64Image, setBase64Image] = useState(null);
     const [scanning, setScanning] = useState(false);
     const [saving, setSaving] = useState(false);
 
-    // Scanned & editable fields
-    const [scannedData, setScannedData] = useState(null);
+    // Step state: 1 = Upload, 2 = Review & Edit, 3 = Confirmation
+    const [step, setStep] = useState(1);
+
+    // Scanned & user-editable fields
     const [merchant, setMerchant] = useState('');
     const [totalAmount, setTotalAmount] = useState('');
-    const [category, setCategory] = useState('Food');
+    const [category, setCategory] = useState(categoryNames[0] || 'Food');
     const [billDate, setBillDate] = useState(() => new Date().toISOString().slice(0, 10));
-    const [dateDetected, setDateDetected] = useState(false);
     const [splitItems, setSplitItems] = useState(false);
     const [items, setItems] = useState([]);
 
-    // Handle image file selection
+    // Handle Escape key
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
+    // Handle file selection
     const handleFileSelect = (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
         if (!file.type.startsWith('image/')) {
-            toast.error('Please select an image file (JPG, PNG, WebP)');
+            toast.error('Please select an image file (PNG, JPG, or WebP)');
             return;
         }
 
         if (file.size > 8 * 1024 * 1024) {
-            toast.error('Image must be under 8MB');
+            toast.error('Image size must be under 8MB');
             return;
         }
 
@@ -44,17 +61,14 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
         reader.onload = () => {
             const result = reader.result;
             setImagePreview(result);
-            setBase64Image(result);
-            // Auto start scanning once image is selected
             processImageScan(result, file.type);
         };
         reader.readAsDataURL(file);
     };
 
-    // Send to Gemini Multimodal OCR
+    // Send to OCR API endpoint
     const processImageScan = async (base64, type) => {
         setScanning(true);
-        setScannedData(null);
         try {
             const res = await API.post('/ai/scan-bill', {
                 image: base64,
@@ -62,393 +76,365 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
             });
 
             const data = res.data.data;
-            setScannedData(data);
             setMerchant(data.merchant || '');
             setTotalAmount(data.totalAmount ? String(data.totalAmount) : '');
             
-            // Category matching
             if (data.primaryCategory && categoryNames.includes(data.primaryCategory)) {
                 setCategory(data.primaryCategory);
             } else if (categoryNames.length > 0) {
                 setCategory(categoryNames[0]);
             }
 
-            // Date Resolution:
-            // 1. If date detected from bill -> use it
-            // 2. Otherwise default to current date (today)
             if (data.billDate) {
                 setBillDate(data.billDate);
-                setDateDetected(true);
             } else {
                 setBillDate(new Date().toISOString().slice(0, 10));
-                setDateDetected(false);
             }
 
-            // Line items if available
             if (Array.isArray(data.items) && data.items.length > 1) {
                 setItems(data.items.map(it => ({
                     name: it.name || '',
                     amount: it.amount ? String(it.amount) : '',
-                    category: categoryNames.includes(it.category) ? it.category : 'Others'
+                    category: categoryNames.includes(it.category) ? it.category : (categoryNames[0] || 'Food')
                 })));
             } else {
                 setItems([]);
                 setSplitItems(false);
             }
 
-            toast.success('Bill scanned successfully!');
+            setStep(2); // Move to review step
+            toast.success('Bill scanned successfully! Please review details.');
         } catch (err) {
-            console.error('Scan error:', err);
-            toast.error(err.response?.data?.message || 'Failed to scan bill. You can still enter details manually.');
-            // Initialize with default date & empty values for manual entry
-            setBillDate(new Date().toISOString().slice(0, 10));
-            setDateDetected(false);
-            setScannedData({ manualFallback: true });
+            toast.error('Could not auto-read the bill. You can still enter details manually.');
+            setStep(2); // Allow manual entry even if scanning had issues
         } finally {
             setScanning(false);
         }
     };
 
-    // Update single item in split view
     const handleItemChange = (index, field, value) => {
-        setItems(prev => {
-            const next = [...prev];
-            next[index] = { ...next[index], [field]: value };
-            return next;
-        });
+        const updated = [...items];
+        updated[index][field] = value;
+        setItems(updated);
     };
 
-    // Confirm and Save Expenses to DB
+    const handleRemoveItem = (index) => {
+        const updated = items.filter((_, i) => i !== index);
+        setItems(updated);
+        if (updated.length <= 1) {
+            setSplitItems(false);
+        }
+    };
+
+    const handleAddItem = () => {
+        setItems([...items, { name: '', amount: '', category: categoryNames[0] || 'Food' }]);
+    };
+
+    const itemsTotal = items.reduce((sum, it) => sum + (parseFloat(it.amount) || 0), 0);
+
     const handleSave = async () => {
-        if (!billDate) {
-            toast.error('Please select a valid date');
-            return;
+        // Validation before saving
+        if (splitItems) {
+            if (items.length === 0) {
+                toast.error('Add at least one item or uncheck itemized breakdown');
+                return;
+            }
+            for (const it of items) {
+                if (!it.amount || isNaN(parseFloat(it.amount)) || parseFloat(it.amount) <= 0) {
+                    toast.error(`Please specify a valid amount for all items`);
+                    return;
+                }
+            }
+        } else {
+            const parsed = parseFloat(totalAmount);
+            if (!totalAmount || isNaN(parsed) || parsed <= 0) {
+                toast.error('Please enter a valid bill amount');
+                return;
+            }
         }
 
         setSaving(true);
         try {
             if (splitItems && items.length > 0) {
-                // Save as multiple category transactions
-                const validItems = items.filter(it => parseFloat(it.amount) > 0);
-                if (validItems.length === 0) {
-                    toast.error('At least one item must have a valid amount');
-                    setSaving(false);
-                    return;
-                }
-
-                await API.post('/expenses/batch', {
-                    items: validItems.map(it => ({
-                        amount: parseFloat(it.amount),
-                        category: it.category,
-                        description: `${merchant ? merchant + ': ' : ''}${it.name}`.trim(),
-                        date: billDate
-                    }))
-                });
-
-                toast.success(`Recorded ${validItems.length} expenses for ${billDate}!`);
+                // Batch create items
+                const batchPayload = items.map(it => ({
+                    amount: parseFloat(it.amount),
+                    category: it.category || category,
+                    description: (merchant ? `${merchant}: ${it.name}` : it.name).trim() || 'Scanned item',
+                    date: billDate
+                }));
+                await API.post('/expenses/batch', { items: batchPayload });
+                toast.success(`${items.length} itemized expenses recorded!`);
             } else {
-                // Save as single consolidated transaction
-                const parsedAmount = parseFloat(totalAmount);
-                if (isNaN(parsedAmount) || parsedAmount <= 0) {
-                    toast.error('Please enter a valid amount');
-                    setSaving(false);
-                    return;
-                }
-
+                // Single expense
                 await API.post('/expenses', {
-                    amount: parsedAmount,
+                    amount: parseFloat(totalAmount),
                     category,
                     date: billDate,
-                    description: merchant ? `Bill from ${merchant}` : 'Scanned receipt'
+                    description: merchant ? `Bill: ${merchant}` : 'Scanned receipt'
                 });
-
-                toast.success(`Expense of ₹${parsedAmount} recorded for ${billDate}!`);
+                toast.success('Bill expense recorded successfully!');
             }
 
             if (onSuccess) onSuccess();
             onClose();
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Failed to save expense');
+            toast.error(err.response?.data?.message || 'Failed to save scanned expense');
         } finally {
             setSaving(false);
         }
     };
 
     return (
-        <div className="modal-overlay" onClick={onClose} style={{ zIndex: 1100 }}>
-            <div 
-                className="modal" 
-                onClick={(e) => e.stopPropagation()} 
-                style={{ maxWidth: '580px', width: '92%', maxHeight: '90vh', overflowY: 'auto' }}
-            >
+        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="scanner-modal-title">
+            <div className="modal" style={{ maxWidth: '620px' }} onClick={(e) => e.stopPropagation()}>
                 {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.2rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.8rem' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span>📸</span> AI Bill & Receipt Scanner
-                    </h2>
-                    <button 
-                        onClick={onClose}
-                        style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--text-muted)' }}
-                    >
-                        <HiOutlineXMark />
+                <div className="modal-header">
+                    <div>
+                        <h2 id="scanner-modal-title" className="modal-title">
+                            Scan Bill or Receipt
+                        </h2>
+                        <p className="modal-subtitle">
+                            {step === 1 ? 'Step 1 of 2: Upload receipt' : 'Step 2 of 2: Review and confirm values'}
+                        </p>
+                    </div>
+                    <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Close dialog">
+                        <HiOutlineXMark aria-hidden="true" />
                     </button>
                 </div>
 
-                {/* File Upload / Camera Zone */}
-                {!imagePreview ? (
-                    <div 
-                        onClick={() => fileInputRef.current?.click()}
-                        style={{
-                            border: '2px dashed #94a3b8',
-                            borderRadius: '12px',
-                            padding: '2.5rem 1.5rem',
-                            textAlign: 'center',
-                            cursor: 'pointer',
-                            background: '#f8fafc',
-                            transition: 'all 0.2s ease',
-                            marginBottom: '1rem'
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.borderColor = '#6366f1'}
-                        onMouseLeave={e => e.currentTarget.style.borderColor = '#94a3b8'}
-                    >
-                        <input 
-                            ref={fileInputRef} 
-                            type="file" 
-                            accept="image/*" 
-                            capture="environment"
-                            style={{ display: 'none' }} 
-                            onChange={handleFileSelect} 
-                        />
-                        <div style={{ fontSize: '2.8rem', color: '#6366f1', marginBottom: '0.5rem' }}>
-                            <HiOutlineCamera style={{ margin: '0 auto' }} />
-                        </div>
-                        <h4 style={{ margin: '0 0 0.3rem', color: '#1e293b' }}>
-                            Take a photo or upload bill
-                        </h4>
-                        <p style={{ margin: 0, fontSize: '0.82rem', color: '#64748b' }}>
-                            Supports Kirana slips, restaurant bills, supermarket receipts, utility invoices (JPG, PNG)
-                        </p>
-                    </div>
-                ) : (
-                    /* Image Preview & Scan status */
-                    <div style={{ marginBottom: '1rem' }}>
-                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: '#f8fafc', padding: '0.75rem', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
-                            <img 
-                                src={imagePreview} 
-                                alt="Receipt preview" 
-                                style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                <div className="modal-body">
+                    {/* STEP 1: Upload or Photograph */}
+                    {step === 1 && (
+                        <div style={{ textAlign: 'center', padding: '1.5rem 1rem' }}>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                onChange={handleFileSelect}
+                                style={{ display: 'none' }}
+                                id="bill-file-input"
                             />
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#1e293b' }}>
-                                    {merchant || 'Scanned Receipt'}
-                                </div>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                    {scanning ? 'Gemini 2.5 Flash is extracting amounts & dates...' : 'Image loaded & analyzed'}
-                                </div>
-                            </div>
-                            <button
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => {
-                                    setImagePreview(null);
-                                    setScannedData(null);
+
+                            <div 
+                                onClick={() => fileInputRef.current?.click()}
+                                style={{
+                                    border: '2px dashed var(--border-strong)',
+                                    borderRadius: 'var(--radius-md)',
+                                    padding: '2.5rem 1.5rem',
+                                    backgroundColor: 'var(--bg-surface-subtle)',
+                                    cursor: 'pointer',
+                                    transition: 'border-color var(--transition-fast)'
                                 }}
-                                style={{ fontSize: '0.78rem' }}
-                                disabled={scanning}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
+                                aria-label="Upload bill photo or document"
                             >
-                                Change
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {/* Scanning Spinner */}
-                {scanning && (
-                    <div style={{ textAlign: 'center', padding: '2rem 1rem' }}>
-                        <div className="spinner" style={{ margin: '0 auto 1rem' }} />
-                        <h4 style={{ margin: '0 0 0.4rem', color: '#1e293b' }}>Reading bill with AI...</h4>
-                        <p style={{ margin: 0, fontSize: '0.82rem', color: '#64748b' }}>
-                            Detecting merchant, total amount, categories, and date.
-                        </p>
-                    </div>
-                )}
-
-                {/* Scanned & Editable Results Form */}
-                {scannedData && !scanning && (
-                    <div>
-                        {/* Date Status Banner with Manual Override */}
-                        <div style={{
-                            background: dateDetected ? '#f0fdf4' : '#fffbeb',
-                            border: `1px solid ${dateDetected ? '#bbf7d0' : '#fde68a'}`,
-                            borderRadius: '8px',
-                            padding: '0.65rem 0.9rem',
-                            marginBottom: '1rem',
-                            fontSize: '0.82rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            color: dateDetected ? '#166534' : '#92400e'
-                        }}>
-                            <span>{dateDetected ? '✅' : 'ℹ️'}</span>
-                            <div style={{ flex: 1 }}>
-                                <strong>
-                                    {dateDetected ? 'Bill Date Detected:' : 'Date defaulted to Today:'}
-                                </strong>{' '}
-                                {dateDetected ? (
-                                    <span>{billDate} (You can change this below if needed)</span>
-                                ) : (
-                                    <span>No date found on bill. Set to today's date or select a date below.</span>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Editable Form Inputs */}
-                        <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.8rem', marginBottom: '0.8rem' }}>
-                            <div className="form-group">
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    Store / Merchant Name
-                                </label>
-                                <input 
-                                    type="text" 
-                                    value={merchant} 
-                                    onChange={e => setMerchant(e.target.value)}
-                                    placeholder="e.g. D-Mart, Kirana Store"
-                                    style={{ width: '100%' }}
-                                />
-                            </div>
-
-                            <div className="form-group">
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    Bill Date (Editable)
-                                </label>
-                                <input 
-                                    type="date" 
-                                    value={billDate} 
-                                    onChange={e => {
-                                        setBillDate(e.target.value);
-                                        setDateDetected(true);
-                                    }}
-                                    style={{ width: '100%', fontWeight: 600 }}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.8rem', marginBottom: '1rem' }}>
-                            <div className="form-group">
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    Total Amount (₹)
-                                </label>
-                                <input 
-                                    type="number" 
-                                    step="0.01" 
-                                    min="0.01" 
-                                    value={totalAmount} 
-                                    onChange={e => setTotalAmount(e.target.value)}
-                                    placeholder="0.00"
-                                    style={{ width: '100%', fontSize: '1.05rem', fontWeight: 700 }}
-                                />
-                            </div>
-
-                            <div className="form-group">
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    Primary Category
-                                </label>
-                                <select 
-                                    value={category} 
-                                    onChange={e => setCategory(e.target.value)}
-                                    style={{ width: '100%' }}
-                                >
-                                    {categoryNames.map(c => (
-                                        <option key={c} value={c}>{c}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-
-                        {/* Multi-Item Breakdown Toggle */}
-                        {items.length > 1 && (
-                            <div style={{
-                                background: '#f8fafc',
-                                border: '1px solid #e2e8f0',
-                                borderRadius: '8px',
-                                padding: '0.85rem',
-                                marginBottom: '1.2rem'
-                            }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem', color: '#1e293b' }}>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={splitItems} 
-                                        onChange={e => setSplitItems(e.target.checked)} 
-                                        style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                                    />
-                                    <span>🔀 Split into {items.length} category items</span>
-                                </label>
-
-                                {splitItems && (
-                                    <div style={{ marginTop: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                                        {items.map((it, idx) => (
-                                            <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.2fr', gap: '0.4rem', alignItems: 'center' }}>
-                                                <input 
-                                                    type="text" 
-                                                    value={it.name} 
-                                                    onChange={e => handleItemChange(idx, 'name', e.target.value)}
-                                                    placeholder="Item name"
-                                                    style={{ fontSize: '0.8rem', padding: '0.4rem' }}
-                                                />
-                                                <input 
-                                                    type="number" 
-                                                    step="0.01" 
-                                                    value={it.amount} 
-                                                    onChange={e => handleItemChange(idx, 'amount', e.target.value)}
-                                                    placeholder="₹"
-                                                    style={{ fontSize: '0.8rem', padding: '0.4rem' }}
-                                                />
-                                                <select
-                                                    value={it.category}
-                                                    onChange={e => handleItemChange(idx, 'category', e.target.value)}
-                                                    style={{ fontSize: '0.8rem', padding: '0.4rem' }}
-                                                >
-                                                    {categoryNames.map(c => (
-                                                        <option key={c} value={c}>{c}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                        ))}
+                                <div className="empty-state-icon" style={{ margin: '0 auto 1rem', width: '64px', height: '64px' }}>
+                                    <HiOutlineCamera aria-hidden="true" style={{ fontSize: '2rem', color: 'var(--color-primary)' }} />
+                                </div>
+                                <h3 style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>
+                                    {scanning ? 'Reading bill details...' : 'Select or Photograph a Bill'}
+                                </h3>
+                                <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
+                                    Supports grocery receipts, restaurant bills, and invoices (JPG, PNG, WebP)
+                                </p>
+                                
+                                {scanning ? (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: 'var(--color-primary)', fontWeight: 600 }}>
+                                        <div className="spinner" style={{ width: '20px', height: '20px' }} />
+                                        Extracting merchant, date, and amounts...
                                     </div>
+                                ) : (
+                                    <button 
+                                        type="button" 
+                                        className="btn btn-primary"
+                                        onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                                    >
+                                        Choose File / Take Photo
+                                    </button>
                                 )}
                             </div>
-                        )}
-
-                        {/* Confirmation Actions */}
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.8rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
-                            <button 
-                                className="btn btn-secondary" 
-                                onClick={onClose} 
-                                disabled={saving}
-                            >
-                                Cancel
-                            </button>
-                            <button 
-                                className="btn btn-primary" 
-                                onClick={handleSave} 
-                                disabled={saving || (!totalAmount && !splitItems)}
-                                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-                            >
-                                {saving ? (
-                                    <span>Saving...</span>
-                                ) : (
-                                    <>
-                                        <HiOutlineCheck />
-                                        <span>
-                                            {splitItems 
-                                                ? `Record ${items.length} Split Expenses` 
-                                                : `Save ₹${totalAmount || '0'} to ${category}`}
-                                        </span>
-                                    </>
-                                )}
-                            </button>
                         </div>
-                    </div>
-                )}
+                    )}
+
+                    {/* STEP 2: Review, Correct & Confirm */}
+                    {step === 2 && (
+                        <div>
+                            {/* Scanning Feedback Alert */}
+                            <div className="status-banner good" style={{ marginBottom: '1.25rem' }}>
+                                <HiOutlineCheck className="status-banner-icon" aria-hidden="true" />
+                                <div className="status-banner-text">
+                                    <strong>Bill details extracted.</strong> Please review and adjust any field below before confirming.
+                                </div>
+                            </div>
+
+                            {/* Image Preview Thumbnail (Collapsible) */}
+                            {imagePreview && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem', background: 'var(--bg-surface-subtle)', borderRadius: 'var(--radius-sm)', marginBottom: '1.25rem' }}>
+                                    <img 
+                                        src={imagePreview} 
+                                        alt="Scanned Bill Preview" 
+                                        style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: 'var(--radius-xs)', border: '1px solid var(--border-color)' }}
+                                    />
+                                    <div style={{ flex: 1, fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                                        Photo captured. You can re-scan if needed.
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="btn btn-outline btn-sm"
+                                        onClick={() => { setStep(1); setImagePreview(null); }}
+                                    >
+                                        <HiOutlineArrowPath aria-hidden="true" /> Re-scan
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Merchant / Store */}
+                            <div className="form-group">
+                                <label htmlFor="scan-merchant" className="form-label">Store / Merchant</label>
+                                <input
+                                    id="scan-merchant"
+                                    type="text"
+                                    value={merchant}
+                                    onChange={(e) => setMerchant(e.target.value)}
+                                    className="form-input"
+                                    placeholder="e.g. Supermarket, Café, Pharmacy"
+                                />
+                            </div>
+
+                            {/* Date & Category in 2 columns */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                    <label htmlFor="scan-date" className="form-label">Date</label>
+                                    <input
+                                        id="scan-date"
+                                        type="date"
+                                        value={billDate}
+                                        onChange={(e) => setBillDate(e.target.value)}
+                                        className="form-input"
+                                        required
+                                    />
+                                </div>
+
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                    <label htmlFor="scan-category" className="form-label">Category</label>
+                                    <select
+                                        id="scan-category"
+                                        value={category}
+                                        onChange={(e) => setCategory(e.target.value)}
+                                        className="form-select"
+                                    >
+                                        {categoryNames.map(c => (
+                                            <option key={c} value={c}>{c}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Total Amount */}
+                            <div className="form-group">
+                                <label htmlFor="scan-total" className="form-label">
+                                    Total Amount <span style={{ color: 'var(--color-danger)' }}>*</span>
+                                </label>
+                                <div className="input-amount-wrapper">
+                                    <span className="input-currency-prefix" aria-hidden="true">₹</span>
+                                    <input
+                                        id="scan-total"
+                                        type="number"
+                                        step="any"
+                                        min="0.01"
+                                        value={totalAmount}
+                                        onChange={(e) => setTotalAmount(e.target.value)}
+                                        className="form-input input-amount-lg num"
+                                        placeholder="0.00"
+                                        required
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Optional Itemized Split */}
+                            {items.length > 0 && (
+                                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            id="split-items-checkbox"
+                                            checked={splitItems}
+                                            onChange={(e) => setSplitItems(e.target.checked)}
+                                            style={{ width: '18px', height: '18px', accentColor: 'var(--color-primary)' }}
+                                        />
+                                        <label htmlFor="split-items-checkbox" style={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer' }}>
+                                            Record as {items.length} separate items (Itemized)
+                                        </label>
+                                    </div>
+
+                                    {splitItems && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'var(--bg-surface-subtle)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                                            {items.map((item, idx) => (
+                                                <div key={idx} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                    <input
+                                                        type="text"
+                                                        value={item.name}
+                                                        onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
+                                                        placeholder="Item name"
+                                                        className="form-input"
+                                                        style={{ flex: 2, height: '36px', fontSize: '0.8125rem' }}
+                                                    />
+                                                    <input
+                                                        type="number"
+                                                        step="any"
+                                                        value={item.amount}
+                                                        onChange={(e) => handleItemChange(idx, 'amount', e.target.value)}
+                                                        placeholder="Amount"
+                                                        className="form-input num"
+                                                        style={{ flex: 1, height: '36px', fontSize: '0.8125rem' }}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-outline btn-sm"
+                                                        onClick={() => handleRemoveItem(idx)}
+                                                        aria-label="Remove item"
+                                                        style={{ minWidth: '36px', height: '36px', padding: 0 }}
+                                                    >
+                                                        <HiOutlineTrash aria-hidden="true" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                className="btn btn-outline btn-sm"
+                                                onClick={handleAddItem}
+                                                style={{ alignSelf: 'flex-start', marginTop: '0.25rem' }}
+                                            >
+                                                <HiOutlinePlus aria-hidden="true" /> Add Line Item
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="modal-footer">
+                    <button type="button" className="btn btn-outline" onClick={onClose} disabled={saving}>
+                        Cancel
+                    </button>
+                    {step === 2 && (
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={handleSave}
+                            disabled={saving}
+                        >
+                            {saving ? 'Recording...' : 'Confirm & Save Expense'}
+                        </button>
+                    )}
+                </div>
             </div>
         </div>
     );

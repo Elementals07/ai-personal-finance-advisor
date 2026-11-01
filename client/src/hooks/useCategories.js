@@ -9,11 +9,13 @@ export const useCategories = () => {
     const fetchCategories = useCallback(async () => {
         try {
             const res = await API.get('/categories');
-            setCategories(res.data.data);
+            if (Array.isArray(res.data?.data)) {
+                setCategories(res.data.data);
+            }
         } catch (error) {
             console.error('Failed to load categories', error);
             // Fallback to minimal defaults in case of network error
-            setCategories([{ name: 'Others', color: '#64748b', id: 0 }]);
+            setCategories(prev => prev.length > 0 ? prev : [{ id: 0, name: 'Others', color: '#69736C' }]);
         } finally {
             setLoading(false);
         }
@@ -26,8 +28,12 @@ export const useCategories = () => {
     const addCategory = async (name, color) => {
         try {
             const res = await API.post('/categories', { name, color });
-            setCategories([...categories, res.data.data]);
-            toast.success('Category added successfully');
+            if (res.data?.data) {
+                setCategories(prev => [...prev, res.data.data]);
+            } else {
+                await fetchCategories();
+            }
+            toast.success('Category created successfully');
             return true;
         } catch (error) {
             toast.error(error.response?.data?.message || 'Failed to add category');
@@ -38,11 +44,11 @@ export const useCategories = () => {
     const deleteCategory = async (id) => {
         try {
             await API.delete(`/categories/${id}`);
-            setCategories(categories.filter(c => c.id !== id));
+            setCategories(prev => prev.filter(c => c.id !== id));
             toast.success('Category deleted');
             return true;
         } catch (error) {
-            toast.error(error.response?.data?.message || 'Cannot delete global categories');
+            toast.error(error.response?.data?.message || 'Cannot delete system categories');
             return false;
         }
     };
@@ -50,8 +56,8 @@ export const useCategories = () => {
     const updateCategory = async (id, color) => {
         try {
             await API.put(`/categories/${id}`, { color });
-            setCategories(categories.map(c => c.id === id ? { ...c, color } : c));
-            toast.success('Color updated');
+            setCategories(prev => prev.map(c => c.id === id ? { ...c, color } : c));
+            toast.success('Category color updated');
             return true;
         } catch (error) {
             toast.error(error.response?.data?.message || 'Failed to update category');

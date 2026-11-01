@@ -4,8 +4,11 @@ const BudgetPage = () => {
     return (
         <div>
             <div className="page-header">
-                <h1>Budget Manager</h1>
-                <p>Set monthly budgets and track your spending goals</p>
+                <div className="page-tag">Monthly Planning</div>
+                <h1 className="page-title">Budget</h1>
+                <p className="page-subtitle">
+                    Set planned category spending limits and keep your monthly expenses on track.
+                </p>
             </div>
             <BudgetManager />
         </div>

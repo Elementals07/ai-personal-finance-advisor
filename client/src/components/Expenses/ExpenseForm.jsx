@@ -1,73 +1,68 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { HiOutlinePlusCircle, HiOutlineCamera } from 'react-icons/hi2';
+import { HiOutlineCheck, HiOutlineXMark, HiOutlineTag } from 'react-icons/hi2';
 import { useCategories } from '../../hooks/useCategories';
-import API from '../../api/axios';
 
 const ExpenseForm = ({ onSubmit, onClose, editData = null }) => {
     const { categoryNames } = useCategories();
-    const [amount, setAmount] = useState(editData?.amount || '');
-    const [category, setCategory] = useState(editData?.category || 'Food');
+    const [amount, setAmount] = useState(editData ? String(editData.amount) : '');
+    const [category, setCategory] = useState(editData?.category || (categoryNames[0] || 'Food'));
     const [date, setDate] = useState(editData?.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
     const [description, setDescription] = useState(editData?.description || '');
     const [loading, setLoading] = useState(false);
-    const [scanning, setScanning] = useState(false);
-    const fileInputRef = useRef(null);
 
-    const handleScanReceipt = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+    // Ensure category is set if categoryNames load after mount
+    useEffect(() => {
+        if (!editData && categoryNames.length > 0 && !categoryNames.includes(category)) {
+            setCategory(categoryNames[0]);
+        }
+    }, [categoryNames, editData, category]);
 
-        setScanning(true);
-        const reader = new FileReader();
-        reader.onload = async () => {
-            try {
-                const res = await API.post('/ai/scan-bill', {
-                    image: reader.result,
-                    mimeType: file.type
-                });
-                const data = res.data.data;
-                if (data.totalAmount) setAmount(String(data.totalAmount));
-                if (data.primaryCategory && categoryNames.includes(data.primaryCategory)) {
-                    setCategory(data.primaryCategory);
-                }
-                if (data.billDate) {
-                    setDate(data.billDate);
-                    toast.success(`Scanned bill! Date set to ${data.billDate}`);
-                } else {
-                    toast.success('Scanned bill! Date defaulted to today (editable)');
-                }
-                if (data.merchant) {
-                    setDescription(data.merchant);
-                }
-            } catch (err) {
-                toast.error('Could not auto-read receipt. Please fill details manually.');
-            } finally {
-                setScanning(false);
-            }
+    // Handle Escape key
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') onClose();
         };
-        reader.readAsDataURL(file);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
+    const setQuickDate = (daysAgo) => {
+        const d = new Date();
+        d.setDate(d.getDate() - daysAgo);
+        setDate(d.toISOString().slice(0, 10));
     };
+
+    const isToday = date === new Date().toISOString().slice(0, 10);
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const isYesterday = date === yesterdayDate.toISOString().slice(0, 10);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!amount || parseFloat(amount) <= 0) {
-            toast.error('Enter a valid amount');
+        const parsedAmount = parseFloat(amount);
+        if (!amount || isNaN(parsedAmount) || parsedAmount <= 0) {
+            toast.error('Please enter a valid expense amount');
+            return;
+        }
+        if (!category) {
+            toast.error('Please select a category');
             return;
         }
         if (!date) {
-            toast.error('Select a date');
+            toast.error('Please select a date');
             return;
         }
+
         setLoading(true);
         try {
             await onSubmit({
-                amount: parseFloat(amount),
+                amount: parsedAmount,
                 category,
                 date,
                 description: description.trim() || null
             });
-            toast.success(editData ? 'Expense updated!' : 'Expense added!');
+            toast.success(editData ? 'Expense updated' : 'Expense recorded');
             onClose();
         } catch (err) {
             toast.error(err.response?.data?.message || 'Failed to save expense');
@@ -76,105 +71,158 @@ const ExpenseForm = ({ onSubmit, onClose, editData = null }) => {
         }
     };
 
+    // Quick select common categories (first 5)
+    const quickCategories = categoryNames.slice(0, 5);
+
     return (
-        <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="expense-form-title">
             <div className="modal" onClick={(e) => e.stopPropagation()}>
-                <h2>{editData ? '✏️ Edit Expense' : '➕ Add Expense'}</h2>
+                {/* Modal Header */}
+                <div className="modal-header">
+                    <h2 id="expense-form-title" className="modal-title">
+                        {editData ? 'Edit Expense' : 'Add Expense'}
+                    </h2>
+                    <button 
+                        type="button" 
+                        className="modal-close-btn" 
+                        onClick={onClose} 
+                        aria-label="Close form"
+                    >
+                        <HiOutlineXMark aria-hidden="true" />
+                    </button>
+                </div>
 
-                {!editData && (
-                    <>
-                        <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={scanning}
-                            style={{
-                                width: '100%',
-                                padding: '0.65rem',
-                                marginBottom: '1rem',
-                                borderRadius: '8px',
-                                border: '1px dashed #818cf8',
-                                background: '#f5f3ff',
-                                color: '#4338ca',
-                                fontWeight: 600,
-                                fontSize: '0.85rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.5rem',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease'
-                            }}
-                        >
-                            <HiOutlineCamera style={{ fontSize: '1.1rem' }} />
-                            <span>{scanning ? 'Analyzing bill with Gemini...' : '📸 Auto-fill from Bill / Receipt Image'}</span>
-                        </button>
-                        <input 
-                            ref={fileInputRef} 
-                            type="file" 
-                            accept="image/*" 
-                            capture="environment" 
-                            style={{ display: 'none' }} 
-                            onChange={handleScanReceipt} 
-                        />
-                    </>
-                )}
-
-                <form onSubmit={handleSubmit}>
-                    <div className="form-row">
-                        <div className="form-group">
-                            <label htmlFor="expense-amount">Amount (₹)</label>
+                {/* Form Body */}
+                <form onSubmit={handleSubmit} className="modal-body" style={{ padding: '1.25rem 1.5rem' }}>
+                    {/* 1. Amount (Prominent numeric input) */}
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                        <label htmlFor="expense-amount" className="form-label" style={{ fontSize: '0.95rem' }}>
+                            Amount <span style={{ color: 'var(--color-danger)' }}>*</span>
+                        </label>
+                        <div className="input-amount-wrapper">
+                            <span className="input-currency-prefix" aria-hidden="true">₹</span>
                             <input
                                 id="expense-amount"
                                 type="number"
-                                step="0.01"
+                                step="any"
                                 min="0.01"
-                                placeholder="0.00"
+                                inputMode="decimal"
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
+                                className="form-input input-amount-lg num"
+                                placeholder="0"
                                 autoFocus
+                                required
+                                aria-required="true"
                             />
                         </div>
-                        <div className="form-group">
-                            <label htmlFor="expense-category">Category</label>
-                            <select
-                                id="expense-category"
-                                value={category}
-                                onChange={(e) => setCategory(e.target.value)}
-                            >
-                                {categoryNames.map(c => (
-                                    <option key={c} value={c}>{c}</option>
-                                ))}
-                            </select>
-                        </div>
+                        <span className="form-hint">Enter the total amount spent</span>
                     </div>
-                    <div className="form-group">
-                        <label htmlFor="expense-date">Date</label>
+
+                    {/* 2. Category selection with Quick Pills */}
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                        <label htmlFor="expense-category" className="form-label">
+                            Category <span style={{ color: 'var(--color-danger)' }}>*</span>
+                        </label>
+                        
+                        {/* Quick category buttons */}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.5rem' }}>
+                            {quickCategories.map(cat => {
+                                const isSelected = category === cat;
+                                return (
+                                    <button
+                                        key={cat}
+                                        type="button"
+                                        onClick={() => setCategory(cat)}
+                                        className={`btn btn-sm ${isSelected ? 'btn-primary' : 'btn-outline'}`}
+                                        style={{ height: '36px', borderRadius: 'var(--radius-sm)' }}
+                                    >
+                                        {cat}
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Full category dropdown */}
+                        <select
+                            id="expense-category"
+                            value={category}
+                            onChange={(e) => setCategory(e.target.value)}
+                            className="form-select"
+                            required
+                        >
+                            {categoryNames.map(c => (
+                                <option key={c} value={c}>{c}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* 3. Date with quick Today / Yesterday toggles */}
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                        <label htmlFor="expense-date" className="form-label">
+                            Date <span style={{ color: 'var(--color-danger)' }}>*</span>
+                        </label>
+                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                            <button
+                                type="button"
+                                onClick={() => setQuickDate(0)}
+                                className={`btn btn-sm ${isToday ? 'btn-secondary' : 'btn-outline'}`}
+                                style={{ flex: 1, height: '36px' }}
+                            >
+                                Today
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setQuickDate(1)}
+                                className={`btn btn-sm ${isYesterday ? 'btn-secondary' : 'btn-outline'}`}
+                                style={{ flex: 1, height: '36px' }}
+                            >
+                                Yesterday
+                            </button>
+                        </div>
                         <input
                             id="expense-date"
                             type="date"
                             value={date}
                             onChange={(e) => setDate(e.target.value)}
+                            className="form-input"
+                            required
                         />
                     </div>
-                    <div className="form-group">
-                        <label htmlFor="expense-desc">Description (optional)</label>
+
+                    {/* 4. Optional Description */}
+                    <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                        <label htmlFor="expense-desc" className="form-label">
+                            Description <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(Optional)</span>
+                        </label>
                         <input
                             id="expense-desc"
                             type="text"
-                            placeholder="e.g., Lunch at office canteen"
+                            maxLength={255}
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
-                            maxLength={255}
+                            className="form-input"
+                            placeholder="e.g. Weekly grocery shopping"
                         />
                     </div>
-                    <div className="form-actions">
-                        <button type="button" className="btn btn-secondary" onClick={onClose}>
+
+                    {/* 5. Save Button */}
+                    <div style={{ display: 'flex', gap: '0.75rem' }}>
+                        <button
+                            type="button"
+                            className="btn btn-outline"
+                            onClick={onClose}
+                            style={{ flex: 1 }}
+                        >
                             Cancel
                         </button>
-                        <button type="submit" className="btn btn-primary" disabled={loading}>
-                            {loading ? <span className="spinner" /> : (
-                                <><HiOutlinePlusCircle /> {editData ? 'Update' : 'Add Expense'}</>
-                            )}
+                        <button
+                            type="submit"
+                            className="btn btn-primary btn-lg"
+                            disabled={loading}
+                            style={{ flex: 2 }}
+                        >
+                            {loading ? 'Saving...' : (editData ? 'Update Expense' : 'Save Expense')}
                         </button>
                     </div>
                 </form>

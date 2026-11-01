@@ -1,14 +1,25 @@
-const BudgetProgressBar = ({ budget, currentMonth, onMonthChange }) => {
+import { Link } from 'react-router-dom';
+import { HiOutlineCheckCircle, HiOutlineExclamationTriangle, HiOutlineXCircle, HiOutlineArrowRight } from 'react-icons/hi2';
+
+const BudgetProgressBar = ({ budget, currentMonth }) => {
+    const formatCurrency = (val) => '₹' + Math.abs(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
     if (!budget || !budget.hasBudget) {
         return (
-            <div className="chart-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                    <h3>🎯 Budget Progress</h3>
+            <div className="card">
+                <div className="card-header">
+                    <div>
+                        <h2 className="card-title">Budget Status</h2>
+                        <p className="card-subtitle">Spending against planned monthly limits</p>
+                    </div>
                 </div>
-                <div className="empty-state" style={{ padding: '2rem 0' }}>
+                <div className="empty-state" style={{ padding: '2rem 1rem' }}>
                     <div className="empty-state-icon">🎯</div>
-                    <p>No budget set for this month</p>
+                    <h3>No Spending Plan Set</h3>
+                    <p>Set a monthly budget to track category limits and prevent overspending.</p>
+                    <Link to="/budget" className="btn btn-primary btn-sm">
+                        Create Spending Plan <HiOutlineArrowRight aria-hidden="true" />
+                    </Link>
                 </div>
             </div>
         );
@@ -17,90 +28,100 @@ const BudgetProgressBar = ({ budget, currentMonth, onMonthChange }) => {
     const { budgetAmount, totalSpent, remaining, percentUsed } = budget;
     const clampedPercent = Math.min(percentUsed, 100);
 
-    let barClass = '';
-    if (percentUsed >= 100) barClass = 'danger';
-    else if (percentUsed >= 75) barClass = 'warning';
+    let statusType = 'good';
+    let statusText = 'Good: You are within your spending plan';
+    let StatusIcon = HiOutlineCheckCircle;
 
-    const formatCurrency = (val) => '₹' + Math.abs(val).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    if (percentUsed >= 100) {
+        statusType = 'danger';
+        statusText = 'Exceeded: You have spent more than your planned amount';
+        StatusIcon = HiOutlineXCircle;
+    } else if (percentUsed >= 80) {
+        statusType = 'warning';
+        statusText = 'Warning: Your spending is approaching the limit';
+        StatusIcon = HiOutlineExclamationTriangle;
+    }
 
     return (
-        <div className="chart-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                <h3>🎯 Budget Progress</h3>
+        <div className="card">
+            <div className="card-header">
+                <div>
+                    <h2 className="card-title">Budget Status</h2>
+                    <p className="card-subtitle">Spending against planned monthly limits</p>
+                </div>
+                <Link to="/budget" className="btn btn-outline btn-sm">
+                    Adjust Limits
+                </Link>
             </div>
-            <div style={{ padding: '1rem 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {percentUsed}% used
+
+            {/* Status Banner */}
+            <div className={`status-banner ${statusType}`} style={{ marginBottom: '1.25rem' }}>
+                <StatusIcon className="status-banner-icon" aria-hidden="true" />
+                <div className="status-banner-text">
+                    <strong>{statusText}</strong>
+                </div>
+            </div>
+
+            {/* Overall Progress Bar */}
+            <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                        <strong>{percentUsed}%</strong> of spending plan used
                     </span>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: percentUsed >= 100 ? '#ef4444' : 'var(--text-muted)' }}>
-                        {percentUsed >= 100 ? '⚠️ Over Budget!' : `${formatCurrency(remaining)} left`}
+                    <span style={{ fontWeight: 600, color: percentUsed >= 100 ? 'var(--color-danger)' : 'var(--text-primary)' }}>
+                        {percentUsed >= 100 ? `Exceeded by ${formatCurrency(totalSpent - budgetAmount)}` : `${formatCurrency(remaining)} remaining`}
                     </span>
                 </div>
 
-                <div className="progress-bar-container">
+                <div className="progress-bar-container" style={{ height: '12px' }}>
                     <div
-                        className={`progress-bar ${barClass}`}
+                        className={`progress-bar ${statusType}`}
                         style={{ width: `${clampedPercent}%` }}
+                        role="progressbar"
+                        aria-valuenow={clampedPercent}
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-label="Overall budget usage"
                     />
                 </div>
 
-                <div className="budget-stats">
-                    <div>
-                        Spent: <span className="amount">{formatCurrency(totalSpent)}</span>
-                    </div>
-                    <div>
-                        Budget: <span className="amount">{formatCurrency(budgetAmount)}</span>
-                    </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                    <span>Spent: <strong className="num">{formatCurrency(totalSpent)}</strong></span>
+                    <span>Plan: <strong className="num">{formatCurrency(budgetAmount)}</strong></span>
                 </div>
             </div>
 
+            {/* Category Allocations with horizontal bars */}
             {budget.categoryBreakdown && budget.categoryBreakdown.length > 0 && (
-                <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase' }}>
-                        Category Allocations
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.75rem' }}>
+                        Category Breakdown
                     </div>
-                    <div style={{ 
-                        maxHeight: '280px', 
-                        overflowY: 'auto', 
-                        paddingRight: '12px',
-                        marginTop: '0.5rem',
-                        scrollbarWidth: 'thin',
-                        scrollbarColor: 'var(--border-color) transparent'
-                    }} className="custom-scrollbar">
-                        {budget.categoryBreakdown.map((cat) => {
-                            const catBudget = budget.allocations ? budget.allocations[cat.category] : 0;
-                            const catPercent = catBudget > 0 ? Math.round((cat.total / catBudget) * 100) : 0;
-                            const clampedCatPercent = Math.min(catPercent, 100);
-                            
-                            let catBarClass = '';
-                            if (catPercent >= 100) catBarClass = 'danger';
-                            else if (catPercent >= 75) catBarClass = 'warning';
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {budget.categoryBreakdown.slice(0, 6).map((cat) => {
+                            const catBudget = budget.allocations ? (budget.allocations[cat.category] || 0) : 0;
+                            const catPercent = catBudget > 0 ? Math.round((cat.total / catBudget) * 100) : null;
+                            const clampedCat = catPercent !== null ? Math.min(catPercent, 100) : 0;
+                            const isOver = catBudget > 0 && cat.total > catBudget;
 
                             return (
-                                <div key={cat.category} style={{ marginBottom: '1.25rem' }}>
-                                    <div style={{
-                                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                        marginBottom: '0.4rem', fontSize: '0.85rem'
-                                    }}>
-                                        <span className={`category-badge ${cat.category.toLowerCase()}`} style={{ fontWeight: 600 }}>
+                                <div key={cat.category} style={{ fontSize: '0.875rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                                             {cat.category}
                                         </span>
-                                        {catBudget > 0 ? (
-                                            <span style={{ color: catPercent >= 100 ? '#ef4444' : 'var(--text-secondary)', fontWeight: 600 }}>
-                                                {formatCurrency(cat.total)} / {formatCurrency(catBudget)} ({catPercent}%)
-                                            </span>
-                                        ) : (
-                                            <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>
-                                                {formatCurrency(cat.total)}
-                                            </span>
-                                        )}
+                                        <span style={{ color: isOver ? 'var(--color-danger)' : 'var(--text-secondary)', fontWeight: isOver ? 700 : 500 }}>
+                                            <span className="num">{formatCurrency(cat.total)}</span>
+                                            {catBudget > 0 && (
+                                                <span style={{ color: 'var(--text-muted)' }}> / {formatCurrency(catBudget)} ({catPercent}%)</span>
+                                            )}
+                                        </span>
                                     </div>
                                     {catBudget > 0 && (
-                                        <div className="progress-bar-container" style={{ height: '7px', marginBottom: '0' }}>
+                                        <div className="progress-bar-container" style={{ height: '6px' }}>
                                             <div
-                                                className={`progress-bar ${catBarClass}`}
-                                                style={{ width: `${clampedCatPercent}%` }}
+                                                className={`progress-bar ${isOver ? 'danger' : (catPercent >= 80 ? 'warning' : '')}`}
+                                                style={{ width: `${clampedCat}%` }}
                                             />
                                         </div>
                                     )}

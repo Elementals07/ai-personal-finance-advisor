@@ -4,7 +4,12 @@ import ExpenseForm from '../components/Expenses/ExpenseForm';
 import ExpenseList from '../components/Expenses/ExpenseList';
 import BillScannerModal from '../components/Expenses/BillScannerModal';
 import toast from 'react-hot-toast';
-import { HiOutlinePlusCircle } from 'react-icons/hi2';
+import { 
+    HiOutlinePlus, 
+    HiOutlineCamera, 
+    HiOutlineFunnel,
+    HiOutlineArrowDownTray
+} from 'react-icons/hi2';
 import { useCategories } from '../hooks/useCategories';
 
 const TIME_FILTERS = ['Today', 'This Week', 'This Month', 'Specific Date', 'All Time'];
@@ -20,6 +25,7 @@ const ExpensesPage = () => {
     const [showScanner, setShowScanner] = useState(false);
     const [editExpense, setEditExpense] = useState(null);
     const [deletingId, setDeletingId] = useState(null);
+    
     const [filterMonth, setFilterMonth] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -36,7 +42,6 @@ const ExpensesPage = () => {
             let url = `/expenses?page=${pageNum}&limit=25&`;
             const params = [];
 
-            // Apply time filter
             const now = new Date();
             const getLocalDateString = (date) => {
                 const d = new Date(date);
@@ -61,13 +66,13 @@ const ExpensesPage = () => {
             }
 
             if (filterCategory !== 'All') {
-                params.push(`category=${filterCategory}`);
+                params.push(`category=${encodeURIComponent(filterCategory)}`);
             }
 
             url += params.join('&');
             const res = await API.get(url);
 
-            const newExpenses = res.data.data;
+            const newExpenses = res.data.data || [];
             if (isLoadMore) {
                 setExpenses(prev => [...prev, ...newExpenses]);
             } else {
@@ -86,7 +91,7 @@ const ExpensesPage = () => {
     useEffect(() => {
         setPage(1);
         fetchExpenses(1, false);
-    }, [filterMonth, filterCategory, timeFilter, specificDate]);
+    }, [fetchExpenses]);
 
     const handleLoadMore = () => {
         const nextPage = page + 1;
@@ -96,207 +101,165 @@ const ExpensesPage = () => {
 
     const handleCreate = async (data) => {
         await API.post('/expenses', data);
-        fetchExpenses();
+        fetchExpenses(1, false);
     };
 
     const handleUpdate = async (data) => {
+        if (!editExpense) return;
         await API.put(`/expenses/${editExpense.id}`, data);
+        fetchExpenses(1, false);
         setEditExpense(null);
-        fetchExpenses();
     };
 
     const handleDelete = async (id) => {
-        if (deletingId !== id) {
-            setDeletingId(id);
-            return;
-        }
         try {
             await API.delete(`/expenses/${id}`);
-            toast.success('Expense deleted');
+            setExpenses(prev => prev.filter(e => e.id !== id));
             setDeletingId(null);
-            fetchExpenses();
+            toast.success('Expense deleted');
         } catch (err) {
             toast.error('Failed to delete expense');
         }
     };
 
-    const handleEdit = (expense) => {
-        setEditExpense(expense);
-        setShowForm(true);
-    };
-
-    // Group expenses by date
-    const groupedExpenses = expenses.reduce((groups, expense) => {
-        const date = expense.date?.slice(0, 10);
-        if (!groups[date]) groups[date] = [];
-        groups[date].push(expense);
-        return groups;
-    }, {});
-
-    // Sort dates descending
-    const sortedDates = Object.keys(groupedExpenses).sort((a, b) => new Date(b) - new Date(a));
-
-    // Calculate total for current view
-    const total = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
-
-    const formatDateHeader = (dateStr) => {
-        const d = new Date(dateStr + 'T00:00:00');
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-
-        if (d.getTime() === today.getTime()) return '📅 Today';
-        if (d.getTime() === yesterday.getTime()) return '📅 Yesterday';
-        return d.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
-    };
+    const totalFilteredAmount = expenses.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
 
     return (
         <div>
-            {/* Upgraded Page Header */}
-            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
-                <div>
-                    <h1>Expenses</h1>
-                    <p style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                        <span style={{
-                            background: '#f1f5f9', borderRadius: '20px', padding: '0.2rem 0.65rem',
-                            fontWeight: 700, color: 'var(--text-secondary)', fontSize: '0.82rem'
-                        }}>
-                            {expenses.length} transaction{expenses.length !== 1 ? 's' : ''}
-                        </span>
-                        <span style={{ color: 'var(--text-muted)' }}>·</span>
-                        <span style={{
-                            background: '#fef3c7', borderRadius: '20px', padding: '0.2rem 0.65rem',
-                            fontWeight: 700, color: '#92400e', fontSize: '0.82rem'
-                        }}>
-                            Total ₹{total.toLocaleString('en-IN')}
-                        </span>
-                    </p>
+            {/* Page Header with Primary Actions */}
+            <div className="page-header">
+                <div className="page-header-row">
+                    <div>
+                        <div className="page-tag">
+                            Transaction Management
+                        </div>
+                        <h1 className="page-title">Expenses</h1>
+                        <p className="page-subtitle">
+                            Record daily spending, filter by date or category, and scan receipts.
+                        </p>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            className="btn btn-outline"
+                            onClick={() => setShowScanner(true)}
+                            aria-label="Scan bill or receipt"
+                        >
+                            <HiOutlineCamera aria-hidden="true" />
+                            Scan Bill
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => { setEditExpense(null); setShowForm(true); }}
+                            aria-label="Add a new expense"
+                        >
+                            <HiOutlinePlus aria-hidden="true" />
+                            Add Expense
+                        </button>
+                    </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-                    <button
-                        className="btn btn-secondary"
-                        onClick={() => setShowScanner(true)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', borderColor: '#a5b4fc', color: '#4f46e5', background: 'linear-gradient(135deg, #f5f3ff, #eff6ff)', fontWeight: 600, border: '1px solid #c4b5fd' }}
-                    >
-                        <span>📸</span> Scan Bill
-                    </button>
-                    <button className="btn btn-primary" onClick={() => { setEditExpense(null); setShowForm(true); }}>
-                        <HiOutlinePlusCircle /> Add Expense
-                    </button>
-                </div>
             </div>
 
-            {/* Time Filter Tabs */}
-            <div className="filter-tabs">
-                {TIME_FILTERS.map(f => (
-                    <button
-                        key={f}
-                        className={`filter-tab ${timeFilter === f ? 'active' : ''}`}
-                        onClick={() => setTimeFilter(f)}
-                    >
-                        {f}
-                    </button>
-                ))}
-            </div>
-
-            {/* Additional Filters */}
-            <div className="expense-controls">
-                {timeFilter === 'This Month' && (
-                    <input
-                        type="month"
-                        value={filterMonth}
-                        onChange={(e) => setFilterMonth(e.target.value)}
-                        id="filter-month"
-                    />
-                )}
-                {timeFilter === 'Specific Date' && (
-                    <input
-                        type="date"
-                        value={specificDate}
-                        onChange={(e) => setSpecificDate(e.target.value)}
-                        id="filter-date"
-                    />
-                )}
-                <select
-                    value={filterCategory}
-                    onChange={(e) => setFilterCategory(e.target.value)}
-                    id="filter-category"
-                >
-                    <option value="All">All Categories</option>
-                    {categoryNames.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                    ))}
-                </select>
-            </div>
-
-            {/* Grouped Expense List */}
-            <div style={{ animation: 'fadeIn 0.4s ease' }}>
-                {loading ? (
-                    <div className="card" style={{ padding: '1.5rem' }}>
-                        {[...Array(5)].map((_, i) => (
-                            <div key={i} className="loading-skeleton" style={{ height: '48px', marginBottom: '0.5rem' }} />
+            {/* Compact Filter Area */}
+            <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                    {/* Time Filter Pills */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-secondary)', marginRight: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            <HiOutlineFunnel aria-hidden="true" /> Period:
+                        </span>
+                        {TIME_FILTERS.map(tf => (
+                            <button
+                                key={tf}
+                                type="button"
+                                onClick={() => setTimeFilter(tf)}
+                                className={`btn btn-sm ${timeFilter === tf ? 'btn-primary' : 'btn-outline'}`}
+                                style={{ minHeight: '34px', padding: '0 10px', fontSize: '0.8125rem' }}
+                            >
+                                {tf}
+                            </button>
                         ))}
                     </div>
-                ) : expenses.length === 0 ? (
-                    <div className="card">
-                        <div className="empty-state">
-                            <div className="empty-state-icon">📝</div>
-                            <h3>No expenses found</h3>
-                            <p>Start tracking your spending by adding your first expense.</p>
-                            <button className="btn btn-primary" onClick={() => { setEditExpense(null); setShowForm(true); }}>
-                                <HiOutlinePlusCircle /> Add Your First Expense
-                            </button>
-                        </div>
+
+                    {/* Secondary Filters: Month / Date / Category */}
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        {timeFilter === 'This Month' && (
+                            <input
+                                type="month"
+                                value={filterMonth}
+                                onChange={(e) => setFilterMonth(e.target.value)}
+                                className="form-input"
+                                style={{ minHeight: '36px', padding: '0.25rem 0.5rem', fontSize: '0.85rem', width: 'auto' }}
+                                aria-label="Select month filter"
+                            />
+                        )}
+
+                        {timeFilter === 'Specific Date' && (
+                            <input
+                                type="date"
+                                value={specificDate}
+                                onChange={(e) => setSpecificDate(e.target.value)}
+                                className="form-input"
+                                style={{ minHeight: '36px', padding: '0.25rem 0.5rem', fontSize: '0.85rem', width: 'auto' }}
+                                aria-label="Select specific date filter"
+                            />
+                        )}
+
+                        <select
+                            value={filterCategory}
+                            onChange={(e) => setFilterCategory(e.target.value)}
+                            className="form-select"
+                            style={{ minHeight: '36px', padding: '0.25rem 0.75rem', fontSize: '0.85rem', width: 'auto' }}
+                            aria-label="Filter by category"
+                        >
+                            <option value="All">All Categories</option>
+                            {categoryNames.map(c => (
+                                <option key={c} value={c}>{c}</option>
+                            ))}
+                        </select>
                     </div>
-                ) : (
-                    sortedDates.map(date => {
-                        const dayExpenses = groupedExpenses[date];
-                        const dayTotal = dayExpenses.reduce((s, e) => s + parseFloat(e.amount), 0);
-                        return (
-                            <div key={date} className="date-group">
-                                <div className="date-group-header">
-                                    <h4>{formatDateHeader(date)}</h4>
-                                    <span className="date-total">₹{dayTotal.toLocaleString('en-IN')}</span>
-                                </div>
-                                <div className="card">
-                                    <ExpenseList
-                                        expenses={dayExpenses}
-                                        onEdit={handleEdit}
-                                        onDelete={handleDelete}
-                                        deletingId={deletingId}
-                                        onCancelDelete={() => setDeletingId(null)}
-                                        loading={false}
-                                    />
-                                </div>
-                            </div>
-                        );
-                    })
-                )}
+                </div>
+
+                {/* Subtotal callout for currently filtered view */}
+                <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                        Showing <strong>{expenses.length}</strong> {expenses.length === 1 ? 'expense' : 'expenses'}
+                    </span>
+                    <span style={{ color: 'var(--text-primary)' }}>
+                        Total in this view: <strong className="num" style={{ color: 'var(--color-primary)', fontSize: '1rem' }}>₹{totalFilteredAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong>
+                    </span>
+                </div>
             </div>
 
-            {/* Upgraded Load More */}
+            {/* Transaction List Component */}
+            <ExpenseList
+                expenses={expenses}
+                loading={loading}
+                deletingId={deletingId}
+                onStartDelete={(id) => setDeletingId(id)}
+                onCancelDelete={() => setDeletingId(null)}
+                onDelete={handleDelete}
+                onEdit={(exp) => { setEditExpense(exp); setShowForm(true); }}
+            />
+
+            {/* Pagination / Load More */}
             {hasMore && !loading && (
-                <div style={{ textAlign: 'center', margin: '2rem 0 1rem' }}>
+                <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
                     <button
-                        className="btn btn-secondary"
+                        type="button"
+                        className="btn btn-outline"
                         onClick={handleLoadMore}
                         disabled={loadingMore}
-                        style={{ padding: '0.7rem 2.5rem', fontSize: '0.875rem', borderRadius: '20px', minWidth: '200px' }}
                     >
-                        {loadingMore ? (
-                            <><span className="spinner" style={{ width: '16px', height: '16px' }} /> Loading...</>
-                        ) : (
-                            '↓ Load More Transactions'
-                        )}
+                        <HiOutlineArrowDownTray aria-hidden="true" />
+                        {loadingMore ? 'Loading more...' : 'Load More Expenses'}
                     </button>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.6rem' }}>
-                        Showing {expenses.length} results
-                    </p>
                 </div>
             )}
 
-            {/* Expense Form Modal */}
+            {/* Add / Edit Expense Modal */}
             {showForm && (
                 <ExpenseForm
                     editData={editExpense}
@@ -305,11 +268,11 @@ const ExpensesPage = () => {
                 />
             )}
 
-            {/* AI Bill Scanner Modal */}
+            {/* Guided Bill Scanner Modal */}
             {showScanner && (
                 <BillScannerModal
                     onClose={() => setShowScanner(false)}
-                    onSuccess={() => fetchExpenses()}
+                    onSuccess={() => fetchExpenses(1, false)}
                 />
             )}
         </div>

@@ -1,8 +1,8 @@
 /**
  * Auth Context
- * Manages authentication state across the app
+ * Manages authentication state across the app with unified session handling
  */
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import API from '../api/axios';
 
 const AuthContext = createContext(null);
@@ -14,28 +14,61 @@ export const useAuth = () => {
 };
 
 export const AuthProvider = ({ children }) => {
-    const [user, setUser] = useState(null);
-    const [token, setToken] = useState(localStorage.getItem('token'));
+    const [user, setUser] = useState(() => {
+        try {
+            const saved = localStorage.getItem('user');
+            return saved ? JSON.parse(saved) : null;
+        } catch {
+            return null;
+        }
+    });
+    const [token, setToken] = useState(() => localStorage.getItem('token'));
     const [loading, setLoading] = useState(true);
 
-    // On mount, verify stored token
+    // Synchronize 401 logout events from API interceptor
     useEffect(() => {
+        const handleUnauthorized = () => {
+            setToken(null);
+            setUser(null);
+        };
+        window.addEventListener('auth:unauthorized', handleUnauthorized);
+        return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+    }, []);
+
+    // On mount or token change, verify user session
+    useEffect(() => {
+        let isMounted = true;
         const initAuth = async () => {
-            if (token) {
+            const currentToken = localStorage.getItem('token');
+            if (currentToken) {
                 try {
                     const res = await API.get('/auth/me');
-                    setUser(res.data.data);
+                    if (isMounted) {
+                        setUser(res.data.data);
+                        localStorage.setItem('user', JSON.stringify(res.data.data));
+                    }
                 } catch (err) {
-                    // Token invalid, clear
-                    localStorage.removeItem('token');
-                    localStorage.removeItem('user');
-                    setToken(null);
+                    if (isMounted) {
+                        localStorage.removeItem('token');
+                        localStorage.removeItem('user');
+                        setToken(null);
+                        setUser(null);
+                    }
+                }
+            } else {
+                if (isMounted) {
                     setUser(null);
                 }
             }
-            setLoading(false);
+            if (isMounted) {
+                setLoading(false);
+            }
         };
+
         initAuth();
+        return () => {
+            isMounted = false;
+        };
     }, [token]);
 
     const login = async (email, password) => {
@@ -58,17 +91,24 @@ export const AuthProvider = ({ children }) => {
         return userData;
     };
 
-    const logout = () => {
+    const logout = useCallback(() => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         setToken(null);
         setUser(null);
-    };
+    }, []);
 
-    const updateUser = (userData) => {
-        setUser(prev => ({ ...prev, ...userData }));
-        localStorage.setItem('user', JSON.stringify({ ...user, ...userData }));
-    };
+    const updateUser = useCallback((userData) => {
+        setUser(prev => {
+            const next = { ...prev, ...userData };
+            try {
+                localStorage.setItem('user', JSON.stringify(next));
+            } catch (e) {
+                console.error('Failed to persist user update', e);
+            }
+            return next;
+        });
+    }, []);
 
     const value = {
         user,

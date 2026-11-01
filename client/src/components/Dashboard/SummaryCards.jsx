@@ -3,54 +3,59 @@ import {
     HiOutlineWallet, 
     HiOutlineArrowTrendingDown, 
     HiOutlineBanknotes, 
-    HiOutlineChartBar, 
     HiOutlinePencilSquare, 
     HiOutlineCheck,
-    HiOutlineXMark
+    HiOutlineXMark,
+    HiOutlineScale
 } from 'react-icons/hi2';
 import API from '../../api/axios';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
 
 const SummaryCards = ({ summary, budget, onIncomeUpdate }) => {
-    const { user } = useAuth();
+    const { user, updateUser } = useAuth();
     const [isEditingIncome, setIsEditingIncome] = useState(false);
     const [incomeInput, setIncomeInput] = useState('');
     const [saving, setSaving] = useState(false);
 
     const totalSpending = summary?.totalSpending || 0;
-    const monthlyIncome = summary?.monthlyIncome || 0;
-    const savings = monthlyIncome - totalSpending;
-    const savingsRate = monthlyIncome > 0 ? Math.round((savings / monthlyIncome) * 100) : 0;
-    const budgetAmount = budget?.budgetAmount || 0;
-    const budgetRemaining = budgetAmount > 0 ? budgetAmount - totalSpending : 0;
-    const budgetUsedPct = budgetAmount > 0 ? Math.min(100, Math.round((totalSpending / budgetAmount) * 100)) : 0;
-    const monthChange = summary?.monthOverMonthChange;
+    const monthlyIncome = summary?.monthlyIncome || user?.monthly_income || 0;
+    
+    // Budget calculations
+    const hasBudget = Boolean(budget?.hasBudget);
+    const budgetAmount = budget?.budgetAmount || monthlyIncome;
+    // Spending remaining in plan
+    const remainingInPlan = budgetAmount > 0 ? budgetAmount - totalSpending : (monthlyIncome - totalSpending);
+    const isExceeded = remainingInPlan < 0;
+    
+    // Income minus recorded expenses (plainly labeled as Month Difference, not bank balance)
+    const netDifference = monthlyIncome - totalSpending;
 
     const formatCurrency = (val) => {
         return '₹' + Math.abs(val).toLocaleString('en-IN', { maximumFractionDigits: 0 });
     };
 
     const handleEditSave = async () => {
-        if (!incomeInput || isNaN(incomeInput) || Number(incomeInput) < 0) {
-            toast.error("Please enter a valid amount");
+        const num = parseFloat(incomeInput);
+        if (isNaN(num) || num < 0) {
+            toast.error("Please enter a valid positive number for income");
             return;
         }
 
         setSaving(true);
         try {
             await API.put('/auth/profile', {
-                name: user.name,
-                monthly_income: parseFloat(incomeInput)
+                name: user?.name,
+                monthly_income: num
             });
-            
+            updateUser({ monthly_income: num });
             setIsEditingIncome(false);
             if (onIncomeUpdate) {
-                onIncomeUpdate(parseFloat(incomeInput));
+                onIncomeUpdate(num);
             }
-            toast.success("Income updated successfully");
+            toast.success("Monthly income updated");
         } catch (error) {
-            toast.error("Failed to update income");
+            toast.error(error.response?.data?.message || "Failed to update income");
         } finally {
             setSaving(false);
         }
@@ -58,21 +63,45 @@ const SummaryCards = ({ summary, budget, onIncomeUpdate }) => {
 
     return (
         <div className="summary-cards">
-            {/* Card 1: Monthly Income */}
+            {/* 1. Money Left in Spending Plan */}
+            <div className="summary-card" style={{ borderLeft: `4px solid ${isExceeded ? 'var(--color-danger)' : 'var(--color-primary)'}` }}>
+                <div className="summary-card-header">
+                    <div className="summary-card-icon" style={{ backgroundColor: isExceeded ? 'var(--color-danger-subtle)' : 'var(--color-primary-subtle)', color: isExceeded ? 'var(--color-danger)' : 'var(--color-primary)' }}>
+                        <HiOutlineBanknotes aria-hidden="true" />
+                    </div>
+                    <span className={`summary-card-tag ${isExceeded ? 'danger' : 'positive'}`}>
+                        {hasBudget ? 'Planned Budget' : 'Income Baseline'}
+                    </span>
+                </div>
+                <div className="summary-card-label">Money Left in Spending Plan</div>
+                <div className="summary-card-value financial-figure" style={{ color: isExceeded ? 'var(--color-danger)' : 'var(--color-primary)' }}>
+                    {isExceeded ? `-${formatCurrency(remainingInPlan)}` : formatCurrency(remainingInPlan)}
+                </div>
+                <div className="summary-card-helper">
+                    {isExceeded 
+                        ? 'Over planned budget limit for this month' 
+                        : 'Available to spend within your monthly target'}
+                </div>
+            </div>
+
+            {/* 2. Monthly Income */}
             <div className="summary-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                <div className="summary-card-header">
                     <div className="summary-card-icon">
-                        <HiOutlineWallet />
+                        <HiOutlineWallet aria-hidden="true" />
                     </div>
                     {!isEditingIncome && (
                         <button 
                             type="button"
-                            className="btn-icon" 
-                            onClick={() => { setIsEditingIncome(true); setIncomeInput(monthlyIncome.toString()); }} 
-                            title="Edit Monthly Income"
-                            style={{ width: '28px', height: '28px', fontSize: '0.85rem' }}
+                            className="btn btn-outline btn-sm" 
+                            onClick={() => { 
+                                setIsEditingIncome(true); 
+                                setIncomeInput(monthlyIncome.toString()); 
+                            }} 
+                            aria-label="Edit Monthly Income amount"
+                            style={{ height: '32px', padding: '0 8px', fontSize: '0.78rem' }}
                         >
-                            <HiOutlinePencilSquare />
+                            <HiOutlinePencilSquare aria-hidden="true" /> Edit
                         </button>
                     )}
                 </div>
@@ -80,180 +109,92 @@ const SummaryCards = ({ summary, budget, onIncomeUpdate }) => {
                 <div className="summary-card-label">Monthly Income</div>
                 
                 {isEditingIncome ? (
-                    <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', alignItems: 'center' }}>
-                        <input 
-                            type="number" 
-                            value={incomeInput} 
-                            onChange={(e) => setIncomeInput(e.target.value)}
-                            style={{ 
-                                padding: '0.35rem 0.6rem', 
-                                fontSize: '0.95rem', 
-                                fontWeight: 700, 
-                                borderRadius: '8px',
-                                background: '#ffffff',
-                                borderColor: 'var(--color-primary)'
-                            }}
-                            autoFocus
-                            placeholder="Amount in ₹"
-                        />
-                        <button 
-                            type="button"
-                            className="btn btn-primary" 
-                            style={{ padding: '0.4rem 0.6rem', minWidth: '32px' }} 
-                            onClick={handleEditSave} 
-                            disabled={saving}
-                            title="Save"
-                        >
-                            {saving ? <span className="spinner" style={{ width: '12px', height: '12px' }} /> : <HiOutlineCheck />}
-                        </button>
-                        <button 
-                            type="button"
-                            className="btn btn-secondary" 
-                            style={{ padding: '0.4rem 0.6rem', minWidth: '32px' }} 
-                            onClick={() => setIsEditingIncome(false)}
-                            title="Cancel"
-                        >
-                            <HiOutlineXMark />
-                        </button>
+                    <div style={{ marginTop: '0.25rem' }}>
+                        <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                            <div className="input-amount-wrapper" style={{ flex: 1 }}>
+                                <span style={{ position: 'absolute', left: '8px', fontWeight: 600, color: 'var(--text-secondary)' }}>₹</span>
+                                <input 
+                                    type="number" 
+                                    value={incomeInput} 
+                                    onChange={(e) => setIncomeInput(e.target.value)}
+                                    className="form-input num"
+                                    style={{ paddingLeft: '1.5rem', height: '36px', fontSize: '0.95rem', fontWeight: 700 }}
+                                    autoFocus
+                                    placeholder="Amount"
+                                    aria-label="Monthly income amount in rupees"
+                                />
+                            </div>
+                            <button 
+                                type="button"
+                                className="btn btn-primary btn-sm" 
+                                onClick={handleEditSave}
+                                disabled={saving}
+                                title="Save Income"
+                                aria-label="Save Income"
+                                style={{ minWidth: '36px', height: '36px', padding: '0 8px' }}
+                            >
+                                <HiOutlineCheck aria-hidden="true" />
+                            </button>
+                            <button 
+                                type="button"
+                                className="btn btn-outline btn-sm" 
+                                onClick={() => setIsEditingIncome(false)}
+                                title="Cancel"
+                                aria-label="Cancel editing income"
+                                style={{ minWidth: '36px', height: '36px', padding: '0 8px' }}
+                            >
+                                <HiOutlineXMark aria-hidden="true" />
+                            </button>
+                        </div>
                     </div>
                 ) : (
-                    <>
-                        <div className="summary-card-value">{formatCurrency(monthlyIncome)}</div>
-                        <div style={{ 
-                            fontSize: '0.75rem', 
-                            color: 'var(--text-muted)', 
-                            marginTop: '0.5rem', 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: '0.35rem' 
-                        }}>
-                            <span style={{ 
-                                display: 'inline-block', 
-                                width: '6px', 
-                                height: '6px', 
-                                borderRadius: '50%', 
-                                background: '#3b82f6' 
-                            }} />
-                            Base cash inflow
-                        </div>
-                    </>
+                    <div className="summary-card-value financial-figure">
+                        {formatCurrency(monthlyIncome)}
+                    </div>
                 )}
+                <div className="summary-card-helper">
+                    Total expected inflow for the month
+                </div>
             </div>
 
-            {/* Card 2: Total Spending */}
+            {/* 3. Money Spent */}
             <div className="summary-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                    <div className="summary-card-icon">
-                        <HiOutlineArrowTrendingDown />
+                <div className="summary-card-header">
+                    <div className="summary-card-icon" style={{ backgroundColor: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}>
+                        <HiOutlineArrowTrendingDown aria-hidden="true" />
                     </div>
-                    {monthChange !== null && monthChange !== undefined && (
-                        <span className={`summary-card-change ${monthChange > 0 ? 'positive' : 'negative'}`}>
-                            {monthChange > 0 ? '↑' : '↓'} {Math.abs(monthChange)}% MoM
+                    {summary?.transactionCount !== undefined && (
+                        <span className="summary-card-tag positive">
+                            {summary.transactionCount} {summary.transactionCount === 1 ? 'expense' : 'expenses'}
                         </span>
                     )}
                 </div>
-
-                <div className="summary-card-label">Total Outflow</div>
-                <div className="summary-card-value" style={{ color: '#0f172a' }}>
+                <div className="summary-card-label">Money Spent</div>
+                <div className="summary-card-value financial-figure" style={{ color: 'var(--color-accent)' }}>
                     {formatCurrency(totalSpending)}
                 </div>
-
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                    {monthlyIncome > 0 ? (
-                        <span>{Math.round((totalSpending / monthlyIncome) * 100)}% of monthly income</span>
-                    ) : (
-                        <span>Current period expenses</span>
-                    )}
+                <div className="summary-card-helper">
+                    Recorded expenses in this period
                 </div>
             </div>
 
-            {/* Card 3: Net Savings */}
+            {/* 4. Month Savings (Income - Expenses) */}
             <div className="summary-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                    <div className="summary-card-icon">
-                        <HiOutlineBanknotes />
+                <div className="summary-card-header">
+                    <div className="summary-card-icon" style={{ backgroundColor: netDifference >= 0 ? 'var(--color-secondary)' : 'var(--color-danger-subtle)', color: netDifference >= 0 ? 'var(--color-primary)' : 'var(--color-danger)' }}>
+                        <HiOutlineScale aria-hidden="true" />
                     </div>
-                    {monthlyIncome > 0 && (
-                        <span style={{ 
-                            fontSize: '0.72rem', 
-                            fontWeight: 700, 
-                            padding: '0.2rem 0.55rem', 
-                            borderRadius: '20px',
-                            background: savings >= 0 ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                            color: savings >= 0 ? '#059669' : '#dc2626'
-                        }}>
-                            {savings >= 0 ? `+${savingsRate}% saved` : 'Deficit'}
-                        </span>
-                    )}
+                    <span className={`summary-card-tag ${netDifference >= 0 ? 'positive' : 'danger'}`}>
+                        {netDifference >= 0 ? 'Saved' : 'Deficit'}
+                    </span>
                 </div>
-
-                <div className="summary-card-label">Net Surplus / Savings</div>
-                <div 
-                    className="summary-card-value" 
-                    style={{ color: savings >= 0 ? '#059669' : '#dc2626' }}
-                >
-                    {savings >= 0 ? '+' : '-'}{formatCurrency(savings)}
+                <div className="summary-card-label">Monthly Saved Balance</div>
+                <div className="summary-card-value financial-figure" style={{ color: netDifference >= 0 ? 'var(--color-primary)' : 'var(--color-danger)' }}>
+                    {netDifference < 0 ? '-' : '+'}{formatCurrency(netDifference)}
                 </div>
-
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                    {savings >= 0 ? 'Retained capital' : 'Excess expenditure'}
+                <div className="summary-card-helper">
+                    Income minus recorded expenses (not bank account balance)
                 </div>
-            </div>
-
-            {/* Card 4: Budget Status */}
-            <div className="summary-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                    <div className="summary-card-icon">
-                        <HiOutlineChartBar />
-                    </div>
-                    {budgetAmount > 0 && (
-                        <span style={{ 
-                            fontSize: '0.72rem', 
-                            fontWeight: 700, 
-                            padding: '0.2rem 0.55rem', 
-                            borderRadius: '20px',
-                            background: budgetRemaining >= 0 ? 'rgba(245, 158, 11, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                            color: budgetRemaining >= 0 ? '#d97706' : '#dc2626'
-                        }}>
-                            {budgetUsedPct}% used
-                        </span>
-                    )}
-                </div>
-
-                <div className="summary-card-label">Budget Remaining</div>
-                <div 
-                    className="summary-card-value" 
-                    style={{ color: budgetRemaining >= 0 ? '#d97706' : '#dc2626' }}
-                >
-                    {budgetAmount > 0 ? (
-                        <>{budgetRemaining >= 0 ? '' : '-'}{formatCurrency(budgetRemaining)}</>
-                    ) : (
-                        <span style={{ fontSize: '1.1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Not configured</span>
-                    )}
-                </div>
-
-                {budgetAmount > 0 ? (
-                    <div style={{ marginTop: '0.65rem' }}>
-                        <div style={{ 
-                            height: '5px', 
-                            background: '#e2e8f0', 
-                            borderRadius: '3px', 
-                            overflow: 'hidden' 
-                        }}>
-                            <div style={{ 
-                                height: '100%', 
-                                width: `${budgetUsedPct}%`, 
-                                background: budgetUsedPct > 90 ? '#ef4444' : budgetUsedPct > 75 ? '#f59e0b' : '#3b82f6',
-                                borderRadius: '3px',
-                                transition: 'width 0.6s cubic-bezier(0.4, 0, 0.2, 1)'
-                            }} />
-                        </div>
-                    </div>
-                ) : (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                        Set limit in Budget section
-                    </div>
-                )}
             </div>
         </div>
     );

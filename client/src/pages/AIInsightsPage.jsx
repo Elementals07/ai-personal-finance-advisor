@@ -4,25 +4,23 @@ import ChatAssistant from '../components/AI/ChatAssistant';
 const AIInsightsPage = () => {
     return (
         <div>
-            <div className="page-header" style={{ marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                    <div style={{
-                        width: '36px', height: '36px', borderRadius: '10px',
-                        background: 'linear-gradient(135deg, #6366f1, #3b82f6)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: '1.1rem', boxShadow: '0 4px 12px rgba(99,102,241,0.3)'
-                    }}>🤖</div>
-                    <h1 style={{ margin: 0 }}>AI Insights</h1>
+            {/* Page Header */}
+            <div className="page-header">
+                <div className="page-tag">
+                    AI Guidance
                 </div>
-                <p>Gemini-powered analysis of your real spending data — ask anything about your finances</p>
+                <h1 className="page-title">AI Advisor</h1>
+                <p className="page-subtitle">
+                    Practical financial guidance grounded strictly in your recorded transactions and budget plan.
+                </p>
             </div>
 
+            {/* Responsive 2-Column Grid — fixed height so inner flex columns can scroll */}
             <div style={{ 
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
                 gap: '1.5rem',
-                height: 'calc(100vh - 200px)',
-                minHeight: '580px',
+                alignItems: 'stretch'
             }}>
                 <AnalysisPanel />
                 <ChatAssistant />
