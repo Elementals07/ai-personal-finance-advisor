@@ -59,6 +59,26 @@ const rotateKey = () => {
     return true;
 };
 
+/** Active Gemini client keyed by API key (env rotation + optional personal key) */
+const clientCache = new Map();
+
+/** Get the Gemini client for an optional personal (user-supplied) API key */
+const getAIFor = (personalKey) => {
+    if (personalKey) {
+        if (!clientCache.has(personalKey)) {
+            clientCache.set(personalKey, new GoogleGenAI({ apiKey: personalKey }));
+        }
+        return clientCache.get(personalKey);
+    }
+    return getAI();
+};
+
+/** Rotate to the next env key; personal keys have no rotation (single key) */
+const rotateKeyFor = (personalKey) => {
+    if (personalKey) return false;
+    return rotateKey();
+};
+
 const MODEL = 'gemini-2.5-flash';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,15 +157,30 @@ Answer this question directly using their financial data above. Be specific with
 
 const AIService = {
     /**
+     * Public (non-secret) Gemini configuration state for the client UI.
+     * @returns {object} { configured, keyCount, model }
+     */
+    getConfig() {
+        return {
+            configured: apiKeys.length > 0,
+            keyCount:   apiKeys.length,
+            model:      MODEL,
+            mode:       'backend'
+        };
+    },
+
+    /**
      * Generate financial analysis using Gemini
      * Checks cache first, only calls API if needed
      * @param {number} userId
      * @param {string} month - Format: YYYY-MM
      * @returns {object} { analysis, cached, summary }
      */
-    async generateAnalysis(userId, month = null, refresh = false) {
+    async generateAnalysis(userId, month = null, refresh = false, timeframe = 'month', personalKey = null) {
         // Step 1: Generate processed financial summary with delta matrix
-        const summary = await DataProcessingService.generateFinancialSummary(userId, month);
+        const summary = await DataProcessingService.generateFinancialSummary(
+            userId, month, 'All', timeframe
+        );
 
         // Step 2: Build ultra-dense, human-advisor context block
         const summaryText = DataProcessingService.formatForHumanAdvisorPrompt(summary);
@@ -170,8 +205,8 @@ const AIService = {
 
         // Step 5: Call Gemini API
         try {
-            console.log(`[AI SERVICE] Starting analysis for user ${userId}...`);
-            const response = await callGeminiWithRetry(ANALYSIS_SYSTEM_PROMPT, prompt);
+            console.log(`[AI SERVICE] Starting analysis for user ${userId} (${timeframe})...`);
+            const response = await callGeminiWithRetry(ANALYSIS_SYSTEM_PROMPT, prompt, 3, personalKey);
 
             // Step 6: Cache the response (24 hour TTL)
             await AIInsightsCache.save({
@@ -214,7 +249,7 @@ const AIService = {
      * @param {string} timeframe   - 'Today', 'This Week', 'This Month', 'All'
      * @returns {object} { reply, cached }
      */
-    async chat(userId, userMessage, month = null, timeframe = 'All') {
+    async chat(userId, userMessage, month = null, timeframe = 'All', personalKey = null) {
         // Step 1: Build the user orientation index & advisor system prompt
         const userIndex = await buildUserIndex(userId);
         const systemPrompt = buildAdvisorSystemPrompt(userIndex);
@@ -239,7 +274,7 @@ const AIService = {
 
         // Step 4: Call Gemini with full Function Calling capabilities
         console.log(`[AI SERVICE] Starting tool-enabled chat for user ${userId}: "${userMessage.slice(0, 60)}..."`);
-        const reply = await callGeminiWithTools(systemPrompt, fullUserPrompt, userId);
+        const reply = await callGeminiWithTools(systemPrompt, fullUserPrompt, userId, 5, personalKey);
 
         // Step 5: Cache response
         await AIInsightsCache.save({
@@ -266,7 +301,7 @@ const AIService = {
      * @param {Array<string>} userCategories - List of user's valid category names
      * @returns {Promise<object>} Structured receipt data
      */
-    async scanReceiptImage(base64Data, mimeType = 'image/jpeg', userCategories = []) {
+    async scanReceiptImage(base64Data, mimeType = 'image/jpeg', userCategories = [], personalKey = null) {
         // Strip data URI header if present (e.g. "data:image/jpeg;base64,")
         const cleanBase64 = base64Data.replace(/^data:image\/[a-z0-9\-+.]+;base64,/, '');
 
@@ -294,7 +329,7 @@ Extract and output a valid JSON object with the following fields:
 
 CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
 
-        const genai = getAI();
+        const genai = getAIFor(personalKey);
         let lastError;
 
         for (let attempt = 0; attempt <= 3; attempt++) {
@@ -349,7 +384,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             } catch (error) {
                 lastError = error;
                 console.error(`[AI RECEIPT OCR] Error (attempt ${attempt + 1}):`, error.message);
-                if (rotateKey()) {
+                if (rotateKeyFor(personalKey) || getAIFor(personalKey) !== genai) {
                     continue;
                 }
                 const waitMs = 1500 * (attempt + 1);
@@ -372,12 +407,12 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
  * @param {number} maxTurns
  * @returns {Promise<string>}
  */
-async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 5) {
+async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 5, personalKey = null) {
     let lastError;
 
     for (let attempt = 0; attempt <= 3; attempt++) {
         try {
-            const genai = getAI();
+            const genai = getAIFor(personalKey);
             const contents = [
                 { role: 'user', parts: [{ text: userPrompt }] }
             ];
@@ -446,7 +481,7 @@ async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 
 
             // Rate limit rotation
             if (error.status === 429 || error.message?.includes('429')) {
-                if (rotateKey()) {
+                if (rotateKeyFor(personalKey)) {
                     console.log(`Rate limited. Rotated to key #${currentKeyIndex + 1}. Retrying...`);
                     continue;
                 }
@@ -456,7 +491,7 @@ async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 
             }
 
             if (error.status === 500 || error.status === 503) {
-                rotateKey();
+                rotateKeyFor(personalKey);
                 continue;
             }
 
@@ -475,8 +510,8 @@ async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 
  * @param {number} maxRetries
  * @returns {string} Response text
  */
-async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3) {
-    const genai = getAI();
+async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3, personalKey = null) {
+    const genai = getAIFor(personalKey);
     let lastError;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -501,7 +536,7 @@ async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3) {
             });
 
             if (error.status === 429 || error.message?.includes('429')) {
-                if (rotateKey()) {
+                if (rotateKeyFor(personalKey)) {
                     console.log(`Rate limited. Rotated to key #${currentKeyIndex + 1}. Retrying immediately...`);
                     continue;
                 }
@@ -512,7 +547,7 @@ async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3) {
             }
 
             if (error.status === 500 || error.status === 503) {
-                rotateKey();
+                rotateKeyFor(personalKey);
                 continue;
             }
 

@@ -47,7 +47,7 @@ const DataProcessingService = {
      * @param {string}      timeframe - 'Today' | 'This Week' | 'This Month' | 'All'
      * @returns {object} Structured financial summary
      */
-    async generateFinancialSummary(userId, month = null, timeframe = 'All') {
+    async generateFinancialSummary(userId, month = null, timeframe = 'All', period = 'month') {
         // Default to current month
         if (!month) {
             const now = new Date();
@@ -78,6 +78,14 @@ const DataProcessingService = {
             })()
         ]);
 
+        // ── Budget rows (findByUserAndMonth returns an array) ─────────────────
+        const budgetRows = Array.isArray(budget) ? budget : (budget ? [budget] : []);
+        const overallRow = budgetRows.find(b => b.category === 'All') || null;
+        const savedIncome = user ? parseFloat(user.monthly_income) : 0;
+        const budgetAmount = overallRow
+            ? parseFloat(overallRow.budget_amount)
+            : (savedIncome > 0 ? savedIncome : null);
+
         // ── Month pacing ──────────────────────────────────────────────────────
         const [yearStr, monthStr] = month.split('-');
         const parsedYear  = parseInt(yearStr, 10);
@@ -95,7 +103,6 @@ const DataProcessingService = {
         }
 
         // ── Budget status ─────────────────────────────────────────────────────
-        const budgetAmount = budget ? parseFloat(budget.budget_amount) : null;
         let pacingMetrics  = null;
         if (budgetAmount) {
             const idealDailySpend  = budgetAmount / daysInMonth;
@@ -129,17 +136,47 @@ const DataProcessingService = {
             }
             : { budgetSet: false };
 
+        // ── Period view support (quarter / year analysis) ─────────────────────
+        const isPeriodView = period === 'quarter' || period === 'year';
+        let effectiveSummary = {
+            totalSpending:     monthlySummary.totalSpending,
+            transactionCount:  monthlySummary.transactionCount,
+            categoryBreakdown: monthlySummary.categoryBreakdown
+        };
+        let periodLabel = month;
+        if (isPeriodView) {
+            const [py, pm] = month.split('-').map(Number);
+            let startMonth;
+            if (period === 'quarter') {
+                const sd = new Date(py, pm - 3, 1);
+                startMonth = `${sd.getFullYear()}-${String(sd.getMonth() + 1).padStart(2, '0')}`;
+            } else {
+                startMonth = `${py}-01`;
+            }
+            const periodData = await Transaction.getPeriodSummary(userId, startMonth, month);
+            periodLabel = `${startMonth} to ${month}`;
+            effectiveSummary = {
+                totalSpending:     periodData.totalSpent,
+                transactionCount:  periodData.transactionCount,
+                categoryBreakdown: periodData.byCategory.map(c => ({
+                    category: c.category,
+                    total:    c.total,
+                    count:    c.count
+                }))
+            };
+        }
+
         // ── Month-over-month ──────────────────────────────────────────────────
-        const monthOverMonth = prevSummary.totalSpending > 0
+        const monthOverMonth = !isPeriodView && prevSummary.totalSpending > 0
             ? Math.round(
-                ((monthlySummary.totalSpending - prevSummary.totalSpending)
+                ((effectiveSummary.totalSpending - prevSummary.totalSpending)
                     / prevSummary.totalSpending) * 100
               )
             : null;
 
         // ── Category spending map ─────────────────────────────────────────────
         const categorySpending = {};
-        monthlySummary.categoryBreakdown.forEach(item => {
+        effectiveSummary.categoryBreakdown.forEach(item => {
             categorySpending[item.category] = item.total;
         });
 
@@ -151,9 +188,10 @@ const DataProcessingService = {
             baselineMap[b.category] = b;
         });
 
-        const deltaMatrix = monthlySummary.categoryBreakdown.map(item => {
-            const baseline = baselineMap[item.category];
-            const avgSpent = baseline ? baseline.avgSpent : null;
+        const deltaMatrix = effectiveSummary.categoryBreakdown.map(item => {
+            // Period views have no per-month baseline; classification only.
+            const baseline = isPeriodView ? null : baselineMap[item.category];
+            const avgSpent = baseline && !isPeriodView ? baseline.avgSpent : null;
 
             let changePercent = null;
             let flag = 'new'; // no historical data

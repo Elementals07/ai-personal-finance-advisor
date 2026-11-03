@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(150) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     monthly_income DECIMAL(12, 2) DEFAULT 0.00,
+    is_demo TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = shared demo account',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_email (email)
@@ -48,12 +49,14 @@ CREATE TABLE IF NOT EXISTS transactions (
     category VARCHAR(50) NOT NULL DEFAULT 'Others',
     description VARCHAR(255) DEFAULT NULL,
     date DATE NOT NULL,
+    receipt_fingerprint VARCHAR(80) DEFAULT NULL COMMENT 'Duplicate safeguard for receipts/SMS imports',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user_id (user_id),
     INDEX idx_date (date),
     INDEX idx_user_date (user_id, date),
     INDEX idx_user_category (user_id, category),
+    INDEX idx_user_fingerprint (user_id, receipt_fingerprint),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

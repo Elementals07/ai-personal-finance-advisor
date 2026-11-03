@@ -27,7 +27,9 @@ const expenseValidation = [
 const expenseController = {
     /**
      * POST /api/expenses/batch
-     * Create multiple expenses at once (e.g. from an itemized scanned bill)
+     * Create multiple expenses at once (e.g. from an itemized scanned bill).
+     * Items may carry a `fingerprint` for duplicate protection; duplicates
+     * already recorded for the user are skipped, not inserted.
      */
     async createBatch(req, res, next) {
         try {
@@ -59,17 +61,102 @@ const expenseController = {
                     amount: amt,
                     category: item.category,
                     description: (item.description || '').trim() || null,
-                    date: dateStr
+                    date: dateStr,
+                    fingerprint: (item.fingerprint || item.receipt_fingerprint || null)
                 });
             }
 
-            const created = await Transaction.createBatch(req.user.id, validated);
+            // Scanned receipts share one fingerprint across all line items,
+            // so within-batch duplicates are expected and kept.
+            const { created, skipped } = await Transaction.createBatch(req.user.id, validated, false);
+            await AIInsightsCache.invalidateUser(req.user.id);
+
+            const combined = created.length + skipped.length;
+            res.status(201).json({
+                success: true,
+                message: `${combined} expense(s) recorded successfully`,
+                data: { created, skipped }
+            });
+        } catch (error) {
+            next(error);
+        }
+    },
+
+    /**
+     * POST /api/expenses/sms-import
+     * Import transactions extracted from user-provided bank SMS text.
+     * Uses per-SMS fingerprints so double imports are refused.
+     */
+    async smsImport(req, res, next) {
+        try {
+            const { items } = req.body;
+            if (!Array.isArray(items) || items.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Items array is required'
+                });
+            }
+
+            const validated = [];
+            for (const item of items) {
+                const amt = parseFloat(item.amount);
+                if (isNaN(amt) || amt <= 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Invalid amount: ${item.amount}`
+                    });
+                }
+                if (!item.category) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Category is required for all items'
+                    });
+                }
+                const fingerprint = item.fingerprint || (item.smsId ? `sms_${item.smsId}` : null);
+                const dateStr = item.date || new Date().toISOString().slice(0, 10);
+                const merchant = (item.merchant || '').trim();
+                validated.push({
+                    amount: amt,
+                    category: item.category,
+                    description: (item.description || '').trim() ||
+                        (merchant ? `${merchant} (via SMS)` : 'Bank SMS transaction'),
+                    date: dateStr,
+                    fingerprint
+                });
+            }
+
+            const { created, skipped } = await Transaction.createBatch(req.user.id, validated, true);
             await AIInsightsCache.invalidateUser(req.user.id);
 
             res.status(201).json({
                 success: true,
-                message: `${created.length} expense(s) recorded successfully`,
-                data: created
+                message: created.length > 0
+                    ? `${created.length} transaction(s) imported${skipped.length > 0 ? `, ${skipped.length} already recorded` : ''}`
+                    : 'Those transactions were already imported.',
+                data: { created, skipped }
+            });
+        } catch (error) {
+            next(error);
+        }
+    },
+
+    /**
+     * GET /api/expenses/receipt-fingerprint?fingerprint=...
+     * Client-side duplicate check before saving a scanned receipt.
+     */
+    async checkFingerprint(req, res, next) {
+        try {
+            const { fingerprint } = req.query;
+            if (!fingerprint) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'fingerprint query param is required'
+                });
+            }
+            const existing = await Transaction.findByFingerprint(req.user.id, String(fingerprint));
+            res.json({
+                success: true,
+                data: { exists: Boolean(existing), transaction: existing ? { id: existing.id, date: existing.date } : null }
             });
         } catch (error) {
             next(error);
@@ -83,13 +170,14 @@ const expenseController = {
      */
     async list(req, res, next) {
         try {
-            const { month, category, startDate, endDate, page = 1, limit = 25 } = req.query;
+            const { month, category, startDate, endDate, search, page = 1, limit = 25 } = req.query;
 
             const transactions = await Transaction.findByUserId(req.user.id, {
                 month,
                 category,
                 startDate,
                 endDate,
+                search,
                 limit: parseInt(limit),
                 offset: (parseInt(page) - 1) * parseInt(limit)
             });
@@ -125,14 +213,28 @@ const expenseController = {
                     });
                 }
 
-                const { amount, category, description, date } = req.body;
+                const { amount, category, description, date, fingerprint } = req.body;
+
+                // Duplicate safeguard: reject a receipt fingerprint that is
+                // already recorded for this user.
+                if (fingerprint) {
+                    const existing = await Transaction.findByFingerprint(req.user.id, String(fingerprint));
+                    if (existing) {
+                        return res.status(409).json({
+                            success: false,
+                            message: 'This receipt appears to be recorded already. Please review before saving.',
+                            errors: [{ msg: 'duplicate_fingerprint' }]
+                        });
+                    }
+                }
 
                 const transaction = await Transaction.create({
                     userId: req.user.id,
                     amount: parseFloat(amount),
                     category,
                     description,
-                    date
+                    date,
+                    fingerprint: fingerprint || null
                 });
 
                 // Invalidate AI cache since new data was added

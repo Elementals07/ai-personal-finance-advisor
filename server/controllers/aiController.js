@@ -6,7 +6,26 @@ const { body, validationResult } = require('express-validator');
 const AIService = require('../services/aiService');
 const Category = require('../models/Category');
 
+/** Sanitize an optional personal Gemini key sent by the client */
+function extractPersonalKey(req) {
+    const raw = req.get('x-gemini-key');
+    if (!raw) return null;
+    const key = String(raw).trim();
+    return /^[A-Za-z0-9._-]{10,200}$/.test(key) ? key : null;
+}
+
 const aiController = {
+    /**
+     * GET /api/ai/config
+     * Non-secret Gemini configuration status for the AI Settings UI.
+     */
+    async config(req, res) {
+        res.json({
+            success: true,
+            data: AIService.getConfig()
+        });
+    },
+
     /**
      * POST /api/ai/analyze
      * Trigger AI financial analysis
@@ -14,8 +33,14 @@ const aiController = {
      */
     async analyze(req, res, next) {
         try {
-            const { month, refresh } = req.body;
-            const result = await AIService.generateAnalysis(req.user.id, month || null, refresh || false);
+            const { month, refresh, timeframe } = req.body;
+            const result = await AIService.generateAnalysis(
+                req.user.id,
+                month || null,
+                refresh || false,
+                ['month', 'quarter', 'year'].includes(timeframe) ? timeframe : 'month',
+                extractPersonalKey(req)
+            );
 
             res.json({
                 success: true,
@@ -66,7 +91,8 @@ const aiController = {
 
                 const { message, month, timeframe } = req.body;
 
-                const result = await AIService.chat(req.user.id, message, month || null, timeframe || 'All');
+                const result = await AIService.chat(req.user.id, message, month || null, timeframe || 'All',
+                    extractPersonalKey(req));
 
                 res.json({
                     success: true,
@@ -106,7 +132,8 @@ const aiController = {
             const categories = await Category.findByUserId(req.user.id);
             const categoryNames = categories.map(c => c.name);
 
-            const result = await AIService.scanReceiptImage(image, mimeType || 'image/jpeg', categoryNames);
+            const result = await AIService.scanReceiptImage(image, mimeType || 'image/jpeg', categoryNames,
+                extractPersonalKey(req));
 
             res.json({
                 success: true,

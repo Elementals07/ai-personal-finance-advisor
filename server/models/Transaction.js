@@ -10,10 +10,10 @@ const Transaction = {
      * @param {object} data - Transaction data
      * @returns {object} Insert result
      */
-    async create({ userId, amount, category, description, date }) {
+    async create({ userId, amount, category, description, date, fingerprint }) {
         const [result] = await pool.execute(
-            'INSERT INTO transactions (user_id, amount, category, description, date) VALUES (?, ?, ?, ?, ?)',
-            [userId, amount, category, description || null, date]
+            'INSERT INTO transactions (user_id, amount, category, description, date, receipt_fingerprint) VALUES (?, ?, ?, ?, ?, ?)',
+            [userId, amount, category, description || null, date, fingerprint || null]
         );
         const created = { id: result.insertId, userId, amount, category, description, date };
         // Keep historical snapshot in sync
@@ -23,20 +23,45 @@ const Transaction = {
     },
 
     /**
-     * Create multiple transactions at once (e.g. from an itemized scanned bill)
-     * Keeps category snapshots in sync for each unique month/category.
+     * Create multiple transactions at once (e.g. from an itemized scanned bill
+     * or an imported SMS batch). Skips items whose receipt fingerprint is
+     * already recorded for this user (dedupe), so accidental re-imports do not
+     * create duplicates.
+     *
+     * For SMS imports (`dedupeWithinBatch = true`) identical fingerprints
+     * inside the same payload are also skipped. For itemized receipts all
+     * lines legitimately share one fingerprint, so they are kept together.
+     *
      * @param {number} userId
-     * @param {Array<{ amount, category, description, date }>} items
-     * @returns {Array<object>} Created transactions
+     * @param {Array<{ amount, category, description, date, fingerprint? }>} items
+     * @param {boolean} dedupeWithinBatch
+     * @returns {{ created: Array, skipped: Array<{ fingerprint?, reason }> }}
      */
-    async createBatch(userId, items) {
+    async createBatch(userId, items, dedupeWithinBatch = false) {
         const created = [];
+        const skipped = [];
         const snapshotsToRefresh = new Set();
+        const seenInBatch = new Set();
 
         for (const item of items) {
+            const fingerprint = item.fingerprint || null;
+
+            if (fingerprint) {
+                const existing = await this.findByFingerprint(userId, fingerprint);
+                if (existing) {
+                    skipped.push({ fingerprint, reason: 'duplicate_exists' });
+                    continue;
+                }
+                if (dedupeWithinBatch && seenInBatch.has(fingerprint)) {
+                    skipped.push({ fingerprint, reason: 'duplicate_in_batch' });
+                    continue;
+                }
+                seenInBatch.add(fingerprint);
+            }
+
             const [result] = await pool.execute(
-                'INSERT INTO transactions (user_id, amount, category, description, date) VALUES (?, ?, ?, ?, ?)',
-                [userId, item.amount, item.category, item.description || null, item.date]
+                'INSERT INTO transactions (user_id, amount, category, description, date, receipt_fingerprint) VALUES (?, ?, ?, ?, ?, ?)',
+                [userId, item.amount, item.category, item.description || null, item.date, fingerprint]
             );
             created.push({ id: result.insertId, userId, ...item });
             const month = item.date.slice(0, 7);
@@ -49,7 +74,21 @@ const Transaction = {
             await this.refreshSnapshot(userId, month, cat);
         }
 
-        return created;
+        return { created, skipped };
+    },
+
+    /**
+     * Check whether a receipt/SMS fingerprint has already been recorded
+     * for this user (duplicate safeguard).
+     * @param {number} userId
+     * @param {string} fingerprint
+     */
+    async findByFingerprint(userId, fingerprint) {
+        const [rows] = await pool.execute(
+            'SELECT id, date, amount, category FROM transactions WHERE user_id = ? AND receipt_fingerprint = ? LIMIT 1',
+            [userId, fingerprint]
+        );
+        return rows[0] || null;
     },
 
     /**
@@ -82,6 +121,13 @@ const Transaction = {
         if (filters.endDate) {
             query += ' AND date <= ?';
             params.push(filters.endDate);
+        }
+
+        // Free-text search across description and category
+        if (filters.search) {
+            const term = `%${String(filters.search).trim()}%`;
+            query += ' AND (description LIKE ? OR category LIKE ?)';
+            params.push(term, term);
         }
 
         query += ' ORDER BY date DESC, created_at DESC';
@@ -258,20 +304,48 @@ const Transaction = {
             day: r.day,
             total: parseFloat(r.total)
         }));
-    }, // Add missing brace and comma
+    },
+
+    /**
+     * Reassign all of a user's transactions from one category to another.
+     * Used when a custom category is deleted (expenses move to 'Others').
+     * Keeps category snapshots consistent: old category snapshots are dropped
+     * and the destination category is refreshed for impacted months.
+     * @param {number} userId
+     * @param {string} fromCategory
+     * @param {string} toCategory - Defaults to 'Others'
+     */
+    async reassignCategory(userId, fromCategory, toCategory = 'Others') {
+        const [months] = await pool.execute(
+            `SELECT DISTINCT DATE_FORMAT(date, '%Y-%m') AS month
+             FROM transactions
+             WHERE user_id = ? AND category = ?`,
+            [userId, fromCategory]
+        );
+        if (months.length === 0) return false;
+
+        await pool.execute(
+            'UPDATE transactions SET category = ? WHERE user_id = ? AND category = ?',
+            [toCategory, userId, fromCategory]
+        );
+
+        // Old category snapshots no longer exist
+        await pool.execute(
+            `DELETE FROM category_historical_snapshots
+             WHERE user_id = ? AND period_type = 'month' AND category = ?`,
+            [userId, fromCategory]
+        );
+
+        for (const { month } of months) {
+            await this.refreshSnapshot(userId, month, toCategory);
+        }
+        return true;
+    },
 
     /**
      * Get savings history (Income vs Expenses) by month
      * @param {number} userId
      * @returns {Array} Monthly savings data
-     */
-    /**
-     * Upsert the monthly category snapshot whenever a transaction changes.
-     * Called internally by create / update / delete so the snapshot table
-     * always reflects the current state of the transactions table.
-     * @param {number} userId
-     * @param {string} month - Format: YYYY-MM
-     * @param {string} category
      */
     async refreshSnapshot(userId, month, category) {
         // Query the aggregate first to strictly satisfy ONLY_FULL_GROUP_BY in MySQL 8+/9+

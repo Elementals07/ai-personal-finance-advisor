@@ -6,6 +6,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
+const {
+    DEMO_EMAIL,
+    ensureDemoUser,
+    seedDemoData
+} = require('../services/demoDataService');
 
 // Validation rules
 const registerValidation = [
@@ -53,12 +58,24 @@ const authController = {
 
                 const { name, email, password } = req.body;
 
+                // The demo identity is always reserved, even before the demo
+                // user row is provisioned.
+                if (String(email).toLowerCase() === DEMO_EMAIL) {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'That email is reserved for the demo account. Please use another address.'
+                    });
+                }
+
                 // Check if user already exists
                 const existingUser = await User.findByEmail(email);
                 if (existingUser) {
+                    const message = existingUser.is_demo == 1
+                        ? 'That email is reserved for the demo account. Please use another address.'
+                        : 'An account with this email already exists';
                     return res.status(409).json({
                         success: false,
-                        message: 'An account with this email already exists'
+                        message
                     });
                 }
 
@@ -151,6 +168,37 @@ const authController = {
     ],
 
     /**
+     * POST /api/auth/demo
+     * Explicit demo login. Provisions the shared demo user (with sample data)
+     * on first use and issues a real JWT scoped to the demo user id.
+     */
+    async demoLogin(req, res, next) {
+        try {
+            const demoUser = await ensureDemoUser();
+            await seedDemoData(demoUser.id);
+
+            const token = generateToken({ id: demoUser.id, email: DEMO_EMAIL });
+
+            res.json({
+                success: true,
+                message: 'Logged in as demo user',
+                data: {
+                    token,
+                    user: {
+                        id: demoUser.id,
+                        name: 'Elementals',
+                        email: DEMO_EMAIL,
+                        monthly_income: 65000,
+                        is_demo: true
+                    }
+                }
+            });
+        } catch (error) {
+            next(error);
+        }
+    },
+
+    /**
      * GET /api/auth/me
      * Get current user profile
      */
@@ -171,6 +219,7 @@ const authController = {
                     name: user.name,
                     email: user.email,
                     monthly_income: parseFloat(user.monthly_income),
+                    is_demo: user.is_demo === 1 || user.is_demo === true,
                     created_at: user.created_at
                 }
             });

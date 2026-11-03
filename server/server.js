@@ -26,7 +26,7 @@ app.use(cors({
     origin: process.env.CLIENT_URL || 'http://localhost:5173',
     credentials: true
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging in development
@@ -77,5 +77,14 @@ const startServer = (port, retries = 10) => {
 };
 
 startServer(parseInt(PORT));
+
+// Periodically purge expired AI insight cache rows (maintenance)
+const AIInsightsCache = require('./models/AIInsightsCache');
+const cleanupTimer = setInterval(() => {
+    AIInsightsCache.cleanup().catch(err =>
+        console.error('[SERVER] AI cache cleanup failed:', err.message)
+    );
+}, 6 * 60 * 60 * 1000);
+cleanupTimer.unref();
 
 module.exports = app;

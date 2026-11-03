@@ -61,6 +61,14 @@ const AIInsightsCache = {
     },
 
     /**
+     * Alias kept for backwards compatibility with older call sites
+     * (e.g. expenseController.createBatch).
+     */
+    async invalidateUser(userId) {
+        return this.invalidate(userId);
+    },
+
+    /**
      * Clean up expired cache entries (maintenance)
      */
     async cleanup() {
