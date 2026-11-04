@@ -15,6 +15,7 @@ import {
 const BillScannerModal = ({ onClose, onSuccess }) => {
     const { categoryNames } = useCategories();
     const fileInputRef = useRef(null);
+    const scanInFlightRef = useRef(false);
 
     const [imagePreview, setImagePreview] = useState(null);
     const [mimeType, setMimeType] = useState('image/jpeg');
@@ -66,13 +67,19 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
         reader.readAsDataURL(file);
     };
 
-    // Send to OCR API endpoint
-    const processImageScan = async (base64, type) => {
+    // Send to OCR API endpoint (or refresh the same image while bypassing cache)
+    const processImageScan = async (base64, type, options = {}) => {
+        if (scanInFlightRef.current) return;
+
+        const refresh = Boolean(options.refresh);
+        scanInFlightRef.current = true;
         setScanning(true);
+
         try {
             const res = await API.post('/ai/scan-bill', {
                 image: base64,
-                mimeType: type || mimeType
+                mimeType: type || mimeType,
+                refresh
             });
 
             const data = res.data.data;
@@ -103,13 +110,27 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
             }
 
             setStep(2); // Move to review step
-            toast.success('Bill scanned successfully! Please review details.');
+            toast.success(
+                refresh
+                    ? 'Receipt refreshed. Review the updated details before saving.'
+                    : 'Bill scanned successfully! Please review details.'
+            );
         } catch (err) {
-            toast.error('Could not auto-read the bill. You can still enter details manually.');
-            setStep(2); // Allow manual entry even if scanning had issues
+            if (refresh) {
+                toast.error('Could not refresh the receipt with AI. Previous details were kept.');
+            } else {
+                toast.error('Could not auto-read the bill. You can still enter details manually.');
+                setStep(2); // Allow manual entry even if scanning had issues
+            }
         } finally {
+            scanInFlightRef.current = false;
             setScanning(false);
         }
+    };
+
+    const handleRefreshScan = () => {
+        if (!imagePreview || scanInFlightRef.current) return;
+        processImageScan(imagePreview, mimeType, { refresh: true });
     };
 
     const handleItemChange = (index, field, value) => {
@@ -285,7 +306,21 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                     <button
                                         type="button"
                                         className="btn btn-outline btn-sm"
+                                        onClick={handleRefreshScan}
+                                        disabled={scanning}
+                                        title="Re-run AI on this image and bypass the saved result"
+                                    >
+                                        <HiOutlineArrowPath
+                                            className={scanning ? 'spinner' : ''}
+                                            aria-hidden="true"
+                                        />
+                                        {scanning ? 'Refreshing...' : 'Refresh AI'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn btn-outline btn-sm"
                                         onClick={() => { setStep(1); setImagePreview(null); }}
+                                        disabled={scanning}
                                     >
                                         <HiOutlineArrowPath aria-hidden="true" /> Re-scan
                                     </button>

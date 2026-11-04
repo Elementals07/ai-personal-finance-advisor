@@ -121,7 +121,7 @@ const aiController = {
      */
     async scanBill(req, res, next) {
         try {
-            const { image, mimeType } = req.body;
+            const { image, mimeType, refresh } = req.body;
             if (!image) {
                 return res.status(400).json({
                     success: false,
@@ -132,20 +132,62 @@ const aiController = {
             const categories = await Category.findByUserId(req.user.id);
             const categoryNames = categories.map(c => c.name);
 
-            const result = await AIService.scanReceiptImage(image, mimeType || 'image/jpeg', categoryNames,
-                extractPersonalKey(req));
+            const result = await AIService.scanReceiptImage(
+                image,
+                mimeType || 'image/jpeg',
+                categoryNames,
+                extractPersonalKey(req),
+                { userId: req.user.id, refresh: Boolean(refresh) }
+            );
 
             res.json({
                 success: true,
-                message: 'Receipt scanned successfully',
+                message: refresh ? 'Receipt refreshed successfully' : 'Receipt scanned successfully',
                 data: result
             });
         } catch (error) {
             console.error('[AI CONTROLLER] Bill scan failed:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to scan bill. Please ensure image is clear or enter manually.',
-                detail: error.message
+                message: 'Failed to scan bill. Please ensure image is clear or enter manually.'
+            });
+        }
+    },
+
+    /**
+     * POST /api/ai/parse-sms
+     * Parse pasted bank / UPI SMS messages into debit transactions.
+     */
+    async parseSms(req, res, next) {
+        try {
+            const { messages, refresh } = req.body;
+            if (!Array.isArray(messages) || messages.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Messages array is required'
+                });
+            }
+
+            const categories = await Category.findByUserId(req.user.id);
+            const categoryNames = categories.map(c => c.name);
+
+            const result = await AIService.parseSmsMessages(
+                messages,
+                categoryNames,
+                extractPersonalKey(req),
+                { userId: req.user.id, refresh: Boolean(refresh) }
+            );
+
+            res.json({
+                success: true,
+                message: refresh ? 'SMS results refreshed' : 'SMS messages parsed',
+                data: result
+            });
+        } catch (error) {
+            console.error('[AI CONTROLLER] SMS parse failed:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to parse SMS messages. Please try again.'
             });
         }
     }

@@ -10,7 +10,18 @@
  */
 const { GoogleGenAI } = require('@google/genai');
 const AIInsightsCache = require('../models/AIInsightsCache');
+const AIContentCache = require('../models/AIContentCache');
 const DataProcessingService = require('./dataProcessingService');
+const { logAiEvent, logAiEventThrottled, shortHash } = require('../utils/aiLogger');
+const {
+    normalizeReceiptResult,
+    normalizeSmsParse,
+    normalizeSmsContent,
+    isExcludedSmsBody,
+    redactSmsBody,
+    maskSender,
+    dateToLocalYmd
+} = require('../utils/financeParsers');
 const {
     TOOL_DECLARATIONS,
     executeToolCall,
@@ -80,6 +91,174 @@ const rotateKeyFor = (personalKey) => {
 };
 
 const MODEL = 'gemini-2.5-flash';
+
+const RECEIPT_CACHE_FEATURE = 'receipt_scan';
+const SMS_CACHE_FEATURE = 'sms_parse';
+const RECEIPT_PROMPT_VERSION = 2;
+const SMS_PROMPT_VERSION = 2;
+const SMS_CHUNK_SIZE = 15;
+const inFlightAiRequests = new Map();
+
+/** Collapse concurrent identical AI requests into a single Gemini call. */
+function runDeduped(key, task) {
+    if (!key) return task();
+
+    if (inFlightAiRequests.has(key)) {
+        logAiEvent('ai-cache.in-flight', { key: shortHash(key) });
+        return inFlightAiRequests.get(key);
+    }
+
+    const promise = Promise.resolve().then(task);
+    const tracked = promise.finally(() => {
+        if (inFlightAiRequests.get(key) === tracked) {
+            inFlightAiRequests.delete(key);
+        }
+    });
+
+    inFlightAiRequests.set(key, tracked);
+    return tracked;
+}
+
+function buildParamsHash(feature, params) {
+    return AIContentCache.hash(AIContentCache.stableStringify({
+        cacheVersion: AIContentCache.CACHE_VERSION,
+        feature,
+        ...params
+    }));
+}
+
+function parseJsonText(text, fallback = null) {
+    if (!text || !String(text).trim()) return fallback;
+    try {
+        return JSON.parse(text);
+    } catch (_) {
+        const cleaned = String(text)
+            .replace(/```json/gi, '')
+            .replace(/```/g, '')
+            .trim();
+        try {
+            return JSON.parse(cleaned);
+        } catch (_) {
+            return fallback;
+        }
+    }
+}
+
+/**
+ * Call Gemini for a JSON response with key rotation, retry logging and
+ * validation. `parse` may throw to trigger a malformed-response retry.
+ */
+async function callGeminiJson({
+    feature,
+    contents,
+    systemPrompt = null,
+    personalKey = null,
+    maxRetries = 3,
+    temperature = 0.2,
+    parse = null
+}) {
+    let lastError;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const genai = getAIFor(personalKey);
+        const startedAt = Date.now();
+
+        logAiEvent('gemini.request', {
+            feature,
+            model: MODEL,
+            attempt: attempt + 1
+        });
+
+        try {
+            const response = await genai.models.generateContent({
+                model: MODEL,
+                contents,
+                config: {
+                    ...(systemPrompt ? { systemInstruction: systemPrompt } : {}),
+                    responseMimeType: 'application/json',
+                    temperature
+                }
+            });
+
+            let result = response.text;
+            if (parse) {
+                try {
+                    result = parse(response.text);
+                } catch (parseError) {
+                    lastError = parseError;
+                    logAiEvent('gemini.failure', {
+                        feature,
+                        durationMs: Date.now() - startedAt,
+                        status: 'malformed-response',
+                        attempt: attempt + 1
+                    });
+
+                    if (attempt < maxRetries) {
+                        logAiEvent('gemini.retry', {
+                            feature,
+                            reason: 'malformed-response',
+                            attempt: attempt + 1
+                        });
+                        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+
+            logAiEvent('gemini.success', {
+                feature,
+                durationMs: Date.now() - startedAt,
+                attempt: attempt + 1
+            });
+
+            return result;
+        } catch (error) {
+            lastError = error;
+            const status = error.status || error.code || 'unknown';
+
+            logAiEvent('gemini.failure', {
+                feature,
+                durationMs: Date.now() - startedAt,
+                status: String(status),
+                attempt: attempt + 1
+            });
+
+            const rateLimited = status === 429 || error.message?.includes('429');
+            const serverError = status === 500 || status === 503;
+
+            if (rateLimited || serverError) {
+                if (rateLimited && rotateKeyFor(personalKey)) {
+                    logAiEvent('gemini.retry', {
+                        feature,
+                        reason: 'key-rotation',
+                        status: String(status),
+                        attempt: attempt + 1
+                    });
+                    continue;
+                }
+
+                const waitMs = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                logAiEvent('gemini.retry', {
+                    feature,
+                    reason: 'backoff',
+                    status: String(status),
+                    waitMs: Math.round(waitMs),
+                    attempt: attempt + 1
+                });
+                await new Promise(resolve => setTimeout(resolve, waitMs));
+                continue;
+            }
+
+            break;
+        }
+    }
+
+    throw new Error(
+        `${feature} Gemini request failed: ${lastError?.message || 'Unknown error'}`
+    );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SYSTEM PROMPTS
@@ -294,20 +473,69 @@ const AIService = {
 
     /**
      * Scan and extract structured financial data from a bill / receipt image.
-     * Uses Gemini 2.5 Flash Vision.
+     * Uses Gemini 2.5 Flash Vision with a persistent content-hash cache.
      *
      * @param {string} base64Data  - Base64 encoded image string
      * @param {string} mimeType    - e.g. 'image/jpeg', 'image/png', 'image/webp'
      * @param {Array<string>} userCategories - List of user's valid category names
+     * @param {string|null} personalKey - Optional user-supplied Gemini key
+     * @param {object} options - { userId, refresh }
      * @returns {Promise<object>} Structured receipt data
      */
-    async scanReceiptImage(base64Data, mimeType = 'image/jpeg', userCategories = [], personalKey = null) {
-        // Strip data URI header if present (e.g. "data:image/jpeg;base64,")
-        const cleanBase64 = base64Data.replace(/^data:image\/[a-z0-9\-+.]+;base64,/, '');
+    async scanReceiptImage(base64Data, mimeType = 'image/jpeg', userCategories = [], personalKey = null, options = {}) {
+        const userId = options.userId || null;
+        const refresh = Boolean(options.refresh);
 
-        const validCategories = userCategories.length > 0
-            ? userCategories.join(', ')
+        const cleanBase64 = String(base64Data || '').replace(/^data:[^;]+;base64,/, '');
+        const imageBytes = Buffer.from(cleanBase64, 'base64');
+        if (imageBytes.length === 0) {
+            throw new Error('Image data is empty or invalid.');
+        }
+
+        const normalizedMime = String(mimeType || 'image/jpeg').toLowerCase();
+        const categoryNames = (Array.isArray(userCategories) ? userCategories : [])
+            .filter(name => typeof name === 'string' && name.trim());
+        const validCategories = categoryNames.length > 0
+            ? categoryNames.join(', ')
             : 'Food, Groceries, Shopping, Utilities, Health, Education, Entertainment, Travel, Rent, Others';
+
+        const contentHash = AIContentCache.hash(imageBytes);
+        const cacheParams = {
+            promptVersion: RECEIPT_PROMPT_VERSION,
+            model: MODEL,
+            fallbackModels: [],
+            mimeType: normalizedMime,
+            categories: categoryNames
+        };
+        const paramsHash = buildParamsHash(RECEIPT_CACHE_FEATURE, cacheParams);
+        const cacheKey = userId
+            ? `${userId}:${RECEIPT_CACHE_FEATURE}:${AIContentCache.CACHE_VERSION}:${contentHash}:${paramsHash}`
+            : null;
+
+        if (refresh) {
+            logAiEvent('receipt-scan.refresh', { cacheBypassed: true, hash: shortHash(contentHash) });
+        } else if (userId) {
+            const cached = await AIContentCache.find({
+                userId,
+                feature: RECEIPT_CACHE_FEATURE,
+                contentHash,
+                paramsHash
+            });
+
+            if (cached) {
+                logAiEventThrottled(
+                    'receipt-scan.cache-hit',
+                    { user: `u${userId}`, hash: shortHash(contentHash) },
+                    `receipt:${userId}:${contentHash}`
+                );
+                return { ...cached, cached: true };
+            }
+
+            logAiEvent('receipt-scan.cache-miss', {
+                user: `u${userId}`,
+                hash: shortHash(contentHash)
+            });
+        }
 
         const prompt = `You are an expert OCR receipt and bill parser for an Indian personal finance system.
 Examine this image of a receipt, invoice, or handwritten bill carefully.
@@ -329,70 +557,232 @@ Extract and output a valid JSON object with the following fields:
 
 CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
 
-        const genai = getAIFor(personalKey);
-        let lastError;
+        const executeScan = async () => {
+            const parsed = await callGeminiJson({
+                feature: 'receipt-scan',
+                personalKey,
+                temperature: 0.2,
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [
+                            {
+                                inlineData: {
+                                    data: cleanBase64,
+                                    mimeType: normalizedMime
+                                }
+                            },
+                            { text: prompt }
+                        ]
+                    }
+                ],
+                parse: (text) => {
+                    const value = parseJsonText(text, null);
+                    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+                        throw new Error('Gemini returned an unreadable receipt response.');
+                    }
+                    return value;
+                }
+            });
 
-        for (let attempt = 0; attempt <= 3; attempt++) {
-            try {
-                const response = await genai.models.generateContent({
-                    model: 'gemini-2.5-flash',
+            const normalized = normalizeReceiptResult(parsed, categoryNames);
+
+            if (normalized.totalAmount <= 0 && normalized.items.length === 0) {
+                throw new Error('Gemini could not read a usable total or line items from this image.');
+            }
+
+            if (userId) {
+                const updated = await AIContentCache.upsert({
+                    userId,
+                    feature: RECEIPT_CACHE_FEATURE,
+                    contentHash,
+                    paramsHash,
+                    response: normalized
+                });
+
+                logAiEvent(updated ? 'receipt-scan.cache-updated' : 'receipt-scan.cache-saved', {
+                    items: normalized.items.length,
+                    hash: shortHash(contentHash)
+                });
+            }
+
+            return { ...normalized, cached: false };
+        };
+
+        const dedupeKey = cacheKey
+            ? `${cacheKey}:${refresh ? 'refresh' : 'normal'}`
+            : null;
+
+        return runDeduped(dedupeKey, executeScan);
+    },
+
+    /**
+     * Parse a batch of bank/UPI SMS messages into structured debit transactions.
+     * Uses a normalized content-hash cache scoped to the authenticated user.
+     *
+     * @param {Array<object>} messages - [{ id, body, date, address }]
+     * @param {Array<string>} userCategories - Valid category names
+     * @param {string|null} personalKey
+     * @param {object} options - { userId, refresh }
+     * @returns {Promise<object>} { transactions, cached }
+     */
+    async parseSmsMessages(messages = [], userCategories = [], personalKey = null, options = {}) {
+        const userId = options.userId || null;
+        const refresh = Boolean(options.refresh);
+
+        const candidates = (Array.isArray(messages) ? messages : [])
+            .filter(message => message && message.body && !isExcludedSmsBody(message.body))
+            .slice(0, 60);
+
+        if (candidates.length === 0) {
+            return { transactions: [], cached: false };
+        }
+
+        const categoryNames = (Array.isArray(userCategories) ? userCategories : [])
+            .filter(name => typeof name === 'string' && name.trim());
+        const validCategories = categoryNames.length > 0
+            ? categoryNames.join(', ')
+            : 'Food, Groceries, Shopping, Utilities, Health, Education, Entertainment, Travel, Rent, Others';
+
+        const contentHash = AIContentCache.hash(
+            AIContentCache.stableStringify(normalizeSmsContent(candidates))
+        );
+        const cacheParams = {
+            promptVersion: SMS_PROMPT_VERSION,
+            model: MODEL,
+            fallbackModels: [],
+            categories: categoryNames,
+            chunkSize: SMS_CHUNK_SIZE
+        };
+        const paramsHash = buildParamsHash(SMS_CACHE_FEATURE, cacheParams);
+        const cacheKey = userId
+            ? `${userId}:${SMS_CACHE_FEATURE}:${AIContentCache.CACHE_VERSION}:${contentHash}:${paramsHash}`
+            : null;
+
+        if (refresh) {
+            logAiEvent('sms-parse.refresh', { cacheBypassed: true, hash: shortHash(contentHash) });
+        } else if (userId) {
+            const cached = await AIContentCache.find({
+                userId,
+                feature: SMS_CACHE_FEATURE,
+                contentHash,
+                paramsHash
+            });
+
+            if (Array.isArray(cached)) {
+                logAiEventThrottled(
+                    'sms-parse.cache-hit',
+                    {
+                        user: `u${userId}`,
+                        hash: shortHash(contentHash),
+                        transactions: cached.length
+                    },
+                    `sms:${userId}:${contentHash}`
+                );
+                return { transactions: cached, cached: true };
+            }
+
+            logAiEvent('sms-parse.cache-miss', {
+                user: `u${userId}`,
+                hash: shortHash(contentHash)
+            });
+        }
+
+        const buildPrompt = (smsData) => `You are a strict financial NLP parser for Indian banking and UPI messages.
+Extract only completed money-out (debit/expense) transactions from the messages below.
+
+Valid Categories to assign (use exactly one of these names): [${validCategories}].
+
+Rules:
+1. "smsId": The exact "id" from the input message.
+2. "merchant": The business, merchant, or person receiving the payment (e.g. "Swiggy", "Amazon", "Shell Petrol", "D-Mart", "Uber", "Electricity Board"). Use an empty string if it cannot be determined.
+3. "amount": The debited amount as a positive number. Never use an account balance, available balance, or credit amount.
+4. "date": Transaction date in "YYYY-MM-DD" format. Use the approxDate when the message has no explicit date.
+5. "category": Best matched category from [${validCategories}].
+6. "type": "debit" or "credit".
+7. "confidence": A number from 0 to 1 describing how certain you are.
+8. "uncertain": true if the message is ambiguous or you had to guess the merchant or amount.
+
+Exclude:
+- OTPs, login alerts, verification codes and password messages.
+- Credits, salary inflows, refunds, reversals and cashback credits.
+- Balance-only notifications.
+- Failed, declined, cancelled or reversed transactions.
+- Promotional messages and payment/collect requests.
+- Account balance amounts of any kind.
+
+If no message contains a valid debit, return an empty array [].
+
+Input SMS List:
+${JSON.stringify(smsData, null, 2)}
+
+CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
+[
+  { "smsId": "...", "merchant": "...", "amount": 100, "date": "YYYY-MM-DD", "category": "...", "type": "debit", "confidence": 0.9, "uncertain": false }
+]`;
+
+        const executeParse = async () => {
+            const normalized = [];
+
+            for (let index = 0; index < candidates.length; index += SMS_CHUNK_SIZE) {
+                const chunk = candidates.slice(index, index + SMS_CHUNK_SIZE);
+                const smsData = chunk.map(message => ({
+                    id: String(message.id),
+                    from: maskSender(message.address),
+                    body: redactSmsBody(message.body).slice(0, 300),
+                    approxDate: dateToLocalYmd(message.date)
+                }));
+
+                const parsed = await callGeminiJson({
+                    feature: 'sms-parse',
+                    personalKey,
+                    temperature: 0.1,
                     contents: [
                         {
                             role: 'user',
-                            parts: [
-                                {
-                                    inlineData: {
-                                        data: cleanBase64,
-                                        mimeType: mimeType || 'image/jpeg'
-                                    }
-                                },
-                                {
-                                    text: prompt
-                                }
-                            ]
+                            parts: [{ text: buildPrompt(smsData) }]
                         }
                     ],
-                    config: {
-                        responseMimeType: 'application/json',
-                        temperature: 0.2
+                    parse: (text) => {
+                        const value = parseJsonText(text, null);
+                        if (!Array.isArray(value)) {
+                            throw new Error('Gemini returned an unreadable SMS response.');
+                        }
+                        return value;
                     }
                 });
 
-                let parsed;
-                try {
-                    parsed = JSON.parse(response.text);
-                } catch (e) {
-                    const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-                    parsed = JSON.parse(cleanText);
-                }
-
-                const totalAmount = parseFloat(parsed.totalAmount) || 0;
-                let billDate = parsed.billDate;
-                if (billDate && !/^\d{4}-\d{2}-\d{2}$/.test(billDate)) {
-                    billDate = null;
-                }
-
-                return {
-                    merchant:        parsed.merchant || 'Local Store',
-                    totalAmount:     totalAmount,
-                    billDate:        billDate,
-                    dateDetected:    Boolean(billDate),
-                    primaryCategory: parsed.primaryCategory || 'Others',
-                    summary:         parsed.summary || '',
-                    items:           Array.isArray(parsed.items) ? parsed.items : []
-                };
-            } catch (error) {
-                lastError = error;
-                console.error(`[AI RECEIPT OCR] Error (attempt ${attempt + 1}):`, error.message);
-                if (rotateKeyFor(personalKey) || getAIFor(personalKey) !== genai) {
-                    continue;
-                }
-                const waitMs = 1500 * (attempt + 1);
-                await new Promise(r => setTimeout(r, waitMs));
+                normalized.push(...normalizeSmsParse(parsed, chunk, categoryNames));
             }
-        }
 
-        throw new Error(`Failed to parse receipt image: ${lastError?.message || 'Unknown error'}`);
+            if (userId) {
+                const updated = await AIContentCache.upsert({
+                    userId,
+                    feature: SMS_CACHE_FEATURE,
+                    contentHash,
+                    paramsHash,
+                    response: normalized
+                });
+
+                logAiEvent(updated ? 'sms-parse.cache-updated' : 'sms-parse.cache-saved', {
+                    transactions: normalized.length,
+                    hash: shortHash(contentHash)
+                });
+            }
+
+            logAiEvent('sms-parse.complete', {
+                messages: candidates.length,
+                transactions: normalized.length
+            });
+
+            return { transactions: normalized, cached: false };
+        };
+
+        const dedupeKey = cacheKey
+            ? `${cacheKey}:${refresh ? 'refresh' : 'normal'}`
+            : null;
+
+        return runDeduped(dedupeKey, executeParse);
     }
 };
 

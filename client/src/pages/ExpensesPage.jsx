@@ -3,10 +3,12 @@ import API from '../api/axios';
 import ExpenseForm from '../components/Expenses/ExpenseForm';
 import ExpenseList from '../components/Expenses/ExpenseList';
 import BillScannerModal from '../components/Expenses/BillScannerModal';
+import SmsImportModal from '../components/Expenses/SmsImportModal';
 import toast from 'react-hot-toast';
 import { 
     HiOutlinePlus, 
     HiOutlineCamera, 
+    HiOutlineChatBubbleLeftRight,
     HiOutlineFunnel,
     HiOutlineArrowDownTray
 } from 'react-icons/hi2';
@@ -23,6 +25,7 @@ const ExpensesPage = () => {
     const [hasMore, setHasMore] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [showScanner, setShowScanner] = useState(false);
+    const [showSmsImport, setShowSmsImport] = useState(false);
     const [editExpense, setEditExpense] = useState(null);
     const [deletingId, setDeletingId] = useState(null);
     
@@ -135,7 +138,7 @@ const ExpensesPage = () => {
                         </div>
                         <h1 className="page-title">Expenses</h1>
                         <p className="page-subtitle">
-                            Record daily spending, filter by date or category, and scan receipts.
+                            Record daily spending, filter by date or category, scan receipts, or import bank SMS.
                         </p>
                     </div>
 
@@ -148,6 +151,15 @@ const ExpensesPage = () => {
                         >
                             <HiOutlineCamera aria-hidden="true" />
                             Scan Bill
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-outline"
+                            onClick={() => setShowSmsImport(true)}
+                            aria-label="Import bank SMS transactions"
+                        >
+                            <HiOutlineChatBubbleLeftRight aria-hidden="true" />
+                            Import SMS
                         </button>
                         <button
                             type="button"
@@ -272,6 +284,13 @@ const ExpensesPage = () => {
             {showScanner && (
                 <BillScannerModal
                     onClose={() => setShowScanner(false)}
+                    onSuccess={() => fetchExpenses(1, false)}
+                />
+            )}
+
+            {showSmsImport && (
+                <SmsImportModal
+                    onClose={() => setShowSmsImport(false)}
                     onSuccess={() => fetchExpenses(1, false)}
                 />
             )}
