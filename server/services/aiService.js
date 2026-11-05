@@ -1,6 +1,6 @@
 /**
  * AI Service Layer
- * Handles all interactions with Google Gemini API
+ * Routes AI features through the selected provider while preserving Gemini.
  * - Prompt generation
  * - Response caching
  * - Rate limit handling with exponential backoff
@@ -11,6 +11,9 @@
 const { GoogleGenAI } = require('@google/genai');
 const AIInsightsCache = require('../models/AIInsightsCache');
 const AIContentCache = require('../models/AIContentCache');
+const AIUsage = require('../models/AIUsage');
+const { AI_PRICING, estimateCostUsd } = require('../config/aiPricing');
+const VelonaAdapter = require('./velonaAdapter');
 const DataProcessingService = require('./dataProcessingService');
 const { logAiEvent, logAiEventThrottled, shortHash } = require('../utils/aiLogger');
 const {
@@ -90,7 +93,8 @@ const rotateKeyFor = (personalKey) => {
     return rotateKey();
 };
 
-const MODEL = 'gemini-2.5-flash';
+const MODEL = AI_PRICING.gemini.model;
+const PROVIDER_PROMPT_VERSION = 1;
 
 const RECEIPT_CACHE_FEATURE = 'receipt_scan';
 const SMS_CACHE_FEATURE = 'sms_parse';
@@ -144,6 +148,113 @@ function parseJsonText(text, fallback = null) {
     }
 }
 
+function getModelFor(provider) {
+    if (provider === 'velona') return VelonaAdapter.model;
+    if (provider === 'gemini') return MODEL;
+    throw new Error('Unsupported AI provider selected.');
+}
+
+function providerPromptHash(provider, prompt) {
+    return AIInsightsCache.hash(JSON.stringify({
+        provider,
+        model: getModelFor(provider),
+        promptVersion: PROVIDER_PROMPT_VERSION,
+        prompt
+    }));
+}
+
+async function recordAIUsage(data) {
+    try {
+        await AIUsage.record({
+            ...data,
+            estimatedCostUsd: estimateCostUsd(
+                data.provider,
+                data.inputTokens || 0,
+                data.outputTokens || 0
+            )
+        });
+    } catch (error) {
+        logAiEvent('ai-usage.record-failed', {
+            provider: data.provider,
+            errorCode: error.code || 'database_error'
+        });
+    }
+}
+
+function getGeminiTokenUsage(response) {
+    const usage = response?.usageMetadata || {};
+    const inputTokens = usage.promptTokenCount || 0;
+    const outputTokens = usage.candidatesTokenCount || 0;
+    return {
+        inputTokens,
+        outputTokens,
+        totalTokens: usage.totalTokenCount || inputTokens + outputTokens
+    };
+}
+
+async function recordCacheHit(userId, provider, feature) {
+    await recordAIUsage({
+        userId,
+        provider,
+        model: getModelFor(provider),
+        feature,
+        statusCode: null,
+        cacheHit: true
+    });
+}
+
+async function callProviderText(provider, options) {
+    if (provider === 'gemini') {
+        return callGeminiWithRetry(
+            options.systemPrompt,
+            options.userPrompt,
+            options.maxRetries ?? 3,
+            options.personalKey,
+            options.userId,
+            options.feature
+        );
+    }
+    return VelonaAdapter.completeText(options);
+}
+
+async function callProviderJson(provider, options) {
+    if (provider === 'gemini') {
+        return callGeminiJson({ ...options, userId: options.userId });
+    }
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const text = await VelonaAdapter.completeJson(options);
+        try {
+            return options.parse ? options.parse(text) : text;
+        } catch {
+            if (attempt === 1) break;
+        }
+    }
+    throw new VelonaAdapter.AIProviderError(
+        502,
+        `Velona returned invalid structured data for ${options.feature}. Please retry.`,
+        'invalid_json'
+    );
+}
+
+async function callProviderTools(provider, options) {
+    if (provider === 'gemini') {
+        return callGeminiWithTools(
+            options.systemPrompt,
+            options.userPrompt,
+            options.userId,
+            options.maxTurns,
+            options.personalKey,
+            options.conversationHistory
+        );
+    }
+    return VelonaAdapter.completeWithTools({
+        ...options,
+        declarations: TOOL_DECLARATIONS,
+        executeTool: executeToolCall
+    });
+}
+
 /**
  * Call Gemini for a JSON response with key rotation, retry logging and
  * validation. `parse` may throw to trigger a malformed-response retry.
@@ -155,10 +266,9 @@ async function callGeminiJson({
     personalKey = null,
     maxRetries = 3,
     temperature = 0.2,
-    parse = null
+    parse = null,
+    userId = null
 }) {
-    let lastError;
-
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         const genai = getAIFor(personalKey);
         const startedAt = Date.now();
@@ -184,13 +294,21 @@ async function callGeminiJson({
             if (parse) {
                 try {
                     result = parse(response.text);
-                } catch (parseError) {
-                    lastError = parseError;
+                } catch {
                     logAiEvent('gemini.failure', {
                         feature,
                         durationMs: Date.now() - startedAt,
                         status: 'malformed-response',
                         attempt: attempt + 1
+                    });
+                    await recordAIUsage({
+                        userId,
+                        provider: 'gemini',
+                        model: MODEL,
+                        feature,
+                        ...getGeminiTokenUsage(response),
+                        durationMs: Date.now() - startedAt,
+                        statusCode: 200
                     });
 
                     if (attempt < maxRetries) {
@@ -212,17 +330,33 @@ async function callGeminiJson({
                 durationMs: Date.now() - startedAt,
                 attempt: attempt + 1
             });
+            await recordAIUsage({
+                userId,
+                provider: 'gemini',
+                model: MODEL,
+                feature,
+                ...getGeminiTokenUsage(response),
+                durationMs: Date.now() - startedAt,
+                statusCode: 200
+            });
 
             return result;
         } catch (error) {
-            lastError = error;
-            const status = error.status || error.code || 'unknown';
+            const status = error.status || error.statusCode || error.code || 'unknown';
 
             logAiEvent('gemini.failure', {
                 feature,
                 durationMs: Date.now() - startedAt,
                 status: String(status),
                 attempt: attempt + 1
+            });
+            await recordAIUsage({
+                userId,
+                provider: 'gemini',
+                model: MODEL,
+                feature,
+                durationMs: Date.now() - startedAt,
+                statusCode: Number.isInteger(Number(status)) ? Number(status) : null
             });
 
             const rateLimited = status === 429 || error.message?.includes('429');
@@ -255,9 +389,11 @@ async function callGeminiJson({
         }
     }
 
-    throw new Error(
-        `${feature} Gemini request failed: ${lastError?.message || 'Unknown error'}`
+    const error = new Error(
+        `${feature} Gemini request failed. Check Gemini configuration and try again.`
     );
+    error.statusCode = 503;
+    throw error;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,26 +472,30 @@ Answer this question directly using their financial data above. Be specific with
 
 const AIService = {
     /**
-     * Public (non-secret) Gemini configuration state for the client UI.
-     * @returns {object} { configured, keyCount, model }
+     * Public (non-secret) provider configuration for the client UI.
      */
     getConfig() {
         return {
-            configured: apiKeys.length > 0,
-            keyCount:   apiKeys.length,
-            model:      MODEL,
-            mode:       'backend'
+            activeProvider: 'velona',
+            velona: VelonaAdapter.getConfig(),
+            gemini: {
+                configured: apiKeys.length > 0,
+                keyCount: apiKeys.length,
+                model: MODEL
+            },
+            pricing: AI_PRICING,
+            mode: 'backend'
         };
     },
 
     /**
-     * Generate financial analysis using Gemini
+     * Generate financial analysis using the selected provider
      * Checks cache first, only calls API if needed
      * @param {number} userId
      * @param {string} month - Format: YYYY-MM
      * @returns {object} { analysis, cached, summary }
      */
-    async generateAnalysis(userId, month = null, refresh = false, timeframe = 'month', personalKey = null) {
+    async generateAnalysis(userId, month = null, refresh = false, timeframe = 'month', personalKey = null, provider = 'velona') {
         // Step 1: Generate processed financial summary with delta matrix
         const summary = await DataProcessingService.generateFinancialSummary(
             userId, month, 'All', timeframe
@@ -367,12 +507,13 @@ const AIService = {
 
         // Step 3: Build the prompt
         const prompt     = ANALYSIS_USER_PROMPT(summaryText);
-        const promptHash = AIInsightsCache.hash(prompt);
+        const promptHash = providerPromptHash(provider, prompt);
 
         // Step 4: Check cache (skip if refresh is true)
         if (!refresh) {
             const cached = await AIInsightsCache.findValid(userId, 'analysis', promptHash, dataHash);
             if (cached) {
+                await recordCacheHit(userId, provider, 'analysis');
                 return {
                     analysis:     cached.response,
                     cached:       true,
@@ -382,31 +523,33 @@ const AIService = {
             }
         }
 
-        // Step 5: Call Gemini API
-        try {
-            console.log(`[AI SERVICE] Starting analysis for user ${userId} (${timeframe})...`);
-            const response = await callGeminiWithRetry(ANALYSIS_SYSTEM_PROMPT, prompt, 3, personalKey);
+        // Step 5: Call the selected provider
+        console.log(`[AI SERVICE] Starting analysis for user ${userId} (${timeframe})...`);
+        const response = await callProviderText(provider, {
+            systemPrompt: ANALYSIS_SYSTEM_PROMPT,
+            userPrompt: prompt,
+            maxRetries: 3,
+            personalKey,
+            userId,
+            feature: 'analysis'
+        });
 
-            // Step 6: Cache the response (24 hour TTL)
-            await AIInsightsCache.save({
-                userId,
-                type:             'analysis',
-                promptHash,
-                response,
-                dataSnapshotHash: dataHash,
-                ttlHours:         24
-            });
+        // Step 6: Cache the response (24 hour TTL)
+        await AIInsightsCache.save({
+            userId,
+            type:             'analysis',
+            promptHash,
+            response,
+            dataSnapshotHash: dataHash,
+            ttlHours:         24
+        });
 
-            return {
-                analysis:     response,
-                cached:       false,
-                summary,
-                healthSignal: summary.healthSignal
-            };
-        } catch (apiError) {
-            console.error('[AI SERVICE] CRITICAL FAILURE during generateAnalysis:', apiError);
-            throw apiError;
-        }
+        return {
+            analysis:     response,
+            cached:       false,
+            summary,
+            healthSignal: summary.healthSignal
+        };
     },
 
     /**
@@ -420,7 +563,7 @@ const AIService = {
     /**
      * Handle chat messages with full on-demand tool access.
      * The advisor is not bound to a pre-defined snapshot:
-     * Gemini can call tools to query any period, category, or trend across the entire DB.
+     * The selected provider can call tools to query any period, category, or trend across the DB.
      *
      * @param {number} userId
      * @param {string} userMessage - User's question
@@ -428,7 +571,7 @@ const AIService = {
      * @param {string} timeframe   - 'Today', 'This Week', 'This Month', 'All'
      * @returns {object} { reply, cached }
      */
-    async chat(userId, userMessage, month = null, timeframe = 'All', personalKey = null) {
+    async chat(userId, userMessage, month = null, timeframe = 'All', personalKey = null, provider = 'velona', conversationHistory = []) {
         // Step 1: Build the user orientation index & advisor system prompt
         const userIndex = await buildUserIndex(userId);
         const systemPrompt = buildAdvisorSystemPrompt(userIndex);
@@ -440,20 +583,32 @@ const AIService = {
         const fullUserPrompt = `[CURRENT PERIOD CONTEXT]\n${baselineContext}\n\n[USER QUESTION]\n${userMessage}`;
 
         const dataHash = DataProcessingService.hashSummary(summary);
-        const promptHash = AIInsightsCache.hash(fullUserPrompt);
+        const promptHash = providerPromptHash(provider, {
+            prompt: fullUserPrompt,
+            history: conversationHistory
+        });
 
         // Step 3: Check cache (1 hour TTL for chat)
         const cached = await AIInsightsCache.findValid(userId, 'chat', promptHash, dataHash);
         if (cached) {
+            await recordCacheHit(userId, provider, 'chat');
             return {
                 reply: cached.response,
                 cached: true
             };
         }
 
-        // Step 4: Call Gemini with full Function Calling capabilities
+        // Step 4: Call the selected provider with full function-calling capabilities
         console.log(`[AI SERVICE] Starting tool-enabled chat for user ${userId}: "${userMessage.slice(0, 60)}..."`);
-        const reply = await callGeminiWithTools(systemPrompt, fullUserPrompt, userId, 5, personalKey);
+        const reply = await callProviderTools(provider, {
+            systemPrompt,
+            userPrompt: fullUserPrompt,
+            userId,
+            maxTurns: 5,
+            personalKey,
+            conversationHistory,
+            feature: 'chat'
+        });
 
         // Step 5: Cache response
         await AIInsightsCache.save({
@@ -473,7 +628,7 @@ const AIService = {
 
     /**
      * Scan and extract structured financial data from a bill / receipt image.
-     * Uses Gemini 2.5 Flash Vision with a persistent content-hash cache.
+     * Uses the selected provider's vision adapter with a persistent content-hash cache.
      *
      * @param {string} base64Data  - Base64 encoded image string
      * @param {string} mimeType    - e.g. 'image/jpeg', 'image/png', 'image/webp'
@@ -485,6 +640,7 @@ const AIService = {
     async scanReceiptImage(base64Data, mimeType = 'image/jpeg', userCategories = [], personalKey = null, options = {}) {
         const userId = options.userId || null;
         const refresh = Boolean(options.refresh);
+        const provider = options.provider || 'velona';
 
         const cleanBase64 = String(base64Data || '').replace(/^data:[^;]+;base64,/, '');
         const imageBytes = Buffer.from(cleanBase64, 'base64');
@@ -502,7 +658,8 @@ const AIService = {
         const contentHash = AIContentCache.hash(imageBytes);
         const cacheParams = {
             promptVersion: RECEIPT_PROMPT_VERSION,
-            model: MODEL,
+            provider,
+            model: getModelFor(provider),
             fallbackModels: [],
             mimeType: normalizedMime,
             categories: categoryNames
@@ -523,6 +680,7 @@ const AIService = {
             });
 
             if (cached) {
+                await recordCacheHit(userId, provider, 'receipt_scan');
                 logAiEventThrottled(
                     'receipt-scan.cache-hit',
                     { user: `u${userId}`, hash: shortHash(contentHash) },
@@ -558,9 +716,10 @@ Extract and output a valid JSON object with the following fields:
 CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
 
         const executeScan = async () => {
-            const parsed = await callGeminiJson({
+            const parsed = await callProviderJson(provider, {
                 feature: 'receipt-scan',
                 personalKey,
+                userId,
                 temperature: 0.2,
                 contents: [
                     {
@@ -579,7 +738,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
                 parse: (text) => {
                     const value = parseJsonText(text, null);
                     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-                        throw new Error('Gemini returned an unreadable receipt response.');
+                        throw new Error('The selected AI provider returned an unreadable receipt response.');
                     }
                     return value;
                 }
@@ -588,7 +747,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             const normalized = normalizeReceiptResult(parsed, categoryNames);
 
             if (normalized.totalAmount <= 0 && normalized.items.length === 0) {
-                throw new Error('Gemini could not read a usable total or line items from this image.');
+                throw new Error('The selected AI provider could not read a usable total or line items from this image.');
             }
 
             if (userId) {
@@ -629,6 +788,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
     async parseSmsMessages(messages = [], userCategories = [], personalKey = null, options = {}) {
         const userId = options.userId || null;
         const refresh = Boolean(options.refresh);
+        const provider = options.provider || 'velona';
 
         const candidates = (Array.isArray(messages) ? messages : [])
             .filter(message => message && message.body && !isExcludedSmsBody(message.body))
@@ -649,7 +809,8 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
         );
         const cacheParams = {
             promptVersion: SMS_PROMPT_VERSION,
-            model: MODEL,
+            provider,
+            model: getModelFor(provider),
             fallbackModels: [],
             categories: categoryNames,
             chunkSize: SMS_CHUNK_SIZE
@@ -670,6 +831,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             });
 
             if (Array.isArray(cached)) {
+                await recordCacheHit(userId, provider, 'sms_parse');
                 logAiEventThrottled(
                     'sms-parse.cache-hit',
                     {
@@ -733,9 +895,10 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
                     approxDate: dateToLocalYmd(message.date)
                 }));
 
-                const parsed = await callGeminiJson({
+                const parsed = await callProviderJson(provider, {
                     feature: 'sms-parse',
                     personalKey,
+                    userId,
                     temperature: 0.1,
                     contents: [
                         {
@@ -746,7 +909,7 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
                     parse: (text) => {
                         const value = parseJsonText(text, null);
                         if (!Array.isArray(value)) {
-                            throw new Error('Gemini returned an unreadable SMS response.');
+                            throw new Error('The selected AI provider returned an unreadable SMS response.');
                         }
                         return value;
                     }
@@ -797,19 +960,27 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
  * @param {number} maxTurns
  * @returns {Promise<string>}
  */
-async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 5, personalKey = null) {
-    let lastError;
+async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 5, personalKey = null, conversationHistory = []) {
+    let requestStartedAt = Date.now();
+    let requestUsageRecorded = false;
 
     for (let attempt = 0; attempt <= 3; attempt++) {
         try {
             const genai = getAIFor(personalKey);
             const contents = [
+                ...conversationHistory.map(message => ({
+                    role: message.role === 'assistant' ? 'model' : 'user',
+                    parts: [{ text: message.content }]
+                })),
                 { role: 'user', parts: [{ text: userPrompt }] }
             ];
 
             let turn = 0;
             while (turn < maxTurns) {
                 turn++;
+                const startedAt = Date.now();
+                requestStartedAt = startedAt;
+                requestUsageRecorded = false;
                 const response = await genai.models.generateContent({
                     model: MODEL,
                     contents,
@@ -821,16 +992,32 @@ async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 
                     }
                 });
 
+                await recordAIUsage({
+                    userId,
+                    provider: 'gemini',
+                    model: MODEL,
+                    feature: 'chat',
+                    ...getGeminiTokenUsage(response),
+                    durationMs: Date.now() - startedAt,
+                    statusCode: 200
+                });
+                requestUsageRecorded = true;
+
                 const functionCalls = response.functionCalls;
 
                 // If no tools called, we have our final text response!
                 if (!functionCalls || functionCalls.length === 0) {
-                    return response.text || 'I reviewed your financial records, but could not produce a response.';
+                    if (!response.text?.trim()) {
+                        throw new Error('Gemini returned an empty response.');
+                    }
+                    return response.text;
                 }
 
-                console.log(`[AI TOOLS] Turn ${turn}: Gemini invoked ${functionCalls.length} tool(s):`,
-                    functionCalls.map(c => `${c.name}(${JSON.stringify(c.args || {})})`).join('; ')
-                );
+                logAiEvent('gemini.tool-calls', {
+                    turn,
+                    count: functionCalls.length,
+                    names: functionCalls.map(call => call.name)
+                });
 
                 // Append assistant's candidate content (which includes the functionCalls)
                 contents.push(response.candidates[0].content);
@@ -866,8 +1053,22 @@ async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 
 
             throw new Error(`Exceeded max tool turns (${maxTurns}) without a final answer`);
         } catch (error) {
-            lastError = error;
-            console.error(`[AI SERVICE] Error in callGeminiWithTools (Key #${currentKeyIndex + 1}):`, error.message);
+            if (!requestUsageRecorded) {
+                await recordAIUsage({
+                    userId,
+                    provider: 'gemini',
+                    model: MODEL,
+                    feature: 'chat',
+                    durationMs: Date.now() - requestStartedAt,
+                    statusCode: Number.isInteger(Number(error.status || error.statusCode))
+                        ? Number(error.status || error.statusCode)
+                        : null
+                });
+            }
+            logAiEvent('gemini.tool-request-failed', {
+                status: String(error.status || error.statusCode || error.code || 'unknown'),
+                attempt: attempt + 1
+            });
 
             // Rate limit rotation
             if (error.status === 429 || error.message?.includes('429')) {
@@ -889,7 +1090,9 @@ async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 
         }
     }
 
-    throw new Error(`AI Tool execution failed: ${lastError?.message || 'Unknown error'}`);
+    const error = new Error('Google Gemini could not complete the advisor request. Check AI Settings and try again.');
+    error.statusCode = 503;
+    throw error;
 }
 
 /**
@@ -900,11 +1103,12 @@ async function callGeminiWithTools(systemPrompt, userPrompt, userId, maxTurns = 
  * @param {number} maxRetries
  * @returns {string} Response text
  */
-async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3, personalKey = null) {
+async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3, personalKey = null, userId = null, feature = 'analysis') {
     const genai = getAIFor(personalKey);
     let lastError;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const startedAt = Date.now();
         try {
             const response = await genai.models.generateContent({
                 model: MODEL,
@@ -916,13 +1120,36 @@ async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3, per
                 }
             });
 
+            if (!response.text?.trim()) {
+                const emptyError = new Error('Google Gemini returned an empty response.');
+                emptyError.statusCode = 502;
+                throw emptyError;
+            }
+            await recordAIUsage({
+                userId,
+                provider: 'gemini',
+                model: MODEL,
+                feature,
+                ...getGeminiTokenUsage(response),
+                durationMs: Date.now() - startedAt,
+                statusCode: 200
+            });
             return response.text;
         } catch (error) {
             lastError = error;
-            console.error(`[AI SERVICE] Gemini API Error (Key #${currentKeyIndex + 1}):`, {
-                message: error.message,
-                status: error.status,
-                stack: error.stack
+            logAiEvent('gemini.request-failed', {
+                status: String(error.status || error.code || 'unknown'),
+                attempt: attempt + 1
+            });
+            await recordAIUsage({
+                userId,
+                provider: 'gemini',
+                model: MODEL,
+                feature,
+                durationMs: Date.now() - startedAt,
+                statusCode: Number.isInteger(Number(error.status || error.statusCode))
+                    ? Number(error.status || error.statusCode)
+                    : null
             });
 
             if (error.status === 429 || error.message?.includes('429')) {
@@ -945,7 +1172,9 @@ async function callGeminiWithRetry(systemPrompt, userPrompt, maxRetries = 3, per
         }
     }
 
-    throw new Error(`Gemini API failed after ${maxRetries + 1} attempts: ${lastError?.message || 'Unknown error'}`);
+    const error = new Error('Google Gemini is unavailable. Check your API key and try again.');
+    error.statusCode = lastError?.statusCode || 503;
+    throw error;
 }
 
 module.exports = AIService;

@@ -5,6 +5,7 @@
 const { body, validationResult } = require('express-validator');
 const AIService = require('../services/aiService');
 const Category = require('../models/Category');
+const AIUsage = require('../models/AIUsage');
 
 /** Sanitize an optional personal Gemini key sent by the client */
 function extractPersonalKey(req) {
@@ -14,32 +15,93 @@ function extractPersonalKey(req) {
     return /^[A-Za-z0-9._-]{10,200}$/.test(key) ? key : null;
 }
 
+function getProvider(req, res) {
+    const provider = String(req.get('x-ai-provider') || 'velona').toLowerCase();
+    if (provider === 'velona' || provider === 'gemini') return provider;
+    res.status(400).json({
+        success: false,
+        message: 'Unsupported AI provider selection. Choose Velona or Google Gemini in AI Settings.'
+    });
+    return null;
+}
+
+function checkProviderConfiguration(req, res, provider) {
+    const rawKey = req.get('x-gemini-key');
+    const personalKey = extractPersonalKey(req);
+    if (provider === 'gemini' && rawKey && !personalKey) {
+        res.status(400).json({
+            success: false,
+            message: 'The Gemini API key format is invalid. Update it in AI Settings.'
+        });
+        return false;
+    }
+
+    if (provider === 'gemini' && !AIService.getConfig().gemini.configured && !personalKey) {
+        res.status(400).json({
+            success: false,
+            message: 'Google Gemini is not configured. Add a Gemini API key in AI Settings before switching providers.'
+        });
+        return false;
+    }
+
+    return personalKey;
+}
+
+function handleAIError(error, res, next) {
+    if (error.statusCode) {
+        const statusCode = error.statusCode === 401 || error.statusCode === 403
+            ? 502
+            : error.statusCode;
+        return res.status(statusCode).json({
+            success: false,
+            message: error.message
+        });
+    }
+    return next(error);
+}
+
 const aiController = {
     /**
      * GET /api/ai/config
-     * Non-secret Gemini configuration status for the AI Settings UI.
+     * Non-secret provider configuration and usage for AI Settings.
      */
-    async config(req, res) {
-        res.json({
-            success: true,
-            data: AIService.getConfig()
-        });
+    async config(req, res, next) {
+        try {
+            const provider = getProvider(req, res);
+            if (!provider) return;
+            const [usage] = await Promise.all([AIUsage.getSummary(req.user.id)]);
+            res.json({
+                success: true,
+                data: {
+                    ...AIService.getConfig(),
+                    activeProvider: provider,
+                    usage
+                }
+            });
+        } catch (error) {
+            next(error);
+        }
     },
 
     /**
      * POST /api/ai/analyze
      * Trigger AI financial analysis
-     * Only sends processed/summarized data to Gemini
+     * Sends processed/summarized data to the selected provider
      */
     async analyze(req, res, next) {
         try {
             const { month, refresh, timeframe } = req.body;
+            const provider = getProvider(req, res);
+            if (!provider) return;
+            const personalKey = checkProviderConfiguration(req, res, provider);
+            if (personalKey === false) return;
             const result = await AIService.generateAnalysis(
                 req.user.id,
                 month || null,
                 refresh || false,
                 ['month', 'quarter', 'year'].includes(timeframe) ? timeframe : 'month',
-                extractPersonalKey(req)
+                personalKey,
+                provider
             );
 
             res.json({
@@ -53,16 +115,7 @@ const aiController = {
                 }
             });
         } catch (error) {
-            console.error('[AI CONTROLLER] Error during analysis:', error);
-            // Handle Gemini API errors gracefully
-            if (error.message.includes('Gemini API failed')) {
-                return res.status(503).json({
-                    success: false,
-                    message: 'AI service is temporarily unavailable. Please try again in a moment.',
-                    detail: error.message
-                });
-            }
-            next(error);
+            handleAIError(error, res, next);
         }
     },
 
@@ -90,9 +143,23 @@ const aiController = {
                 }
 
                 const { message, month, timeframe } = req.body;
+                const conversationHistory = Array.isArray(req.body.history)
+                    ? req.body.history
+                        .filter(item => item && ['user', 'assistant'].includes(item.role) &&
+                            typeof item.content === 'string' && item.content.trim())
+                        .slice(-10)
+                        .map(item => ({
+                            role: item.role,
+                            content: item.content.slice(0, 4000)
+                        }))
+                    : [];
+                const provider = getProvider(req, res);
+                if (!provider) return;
+                const personalKey = checkProviderConfiguration(req, res, provider);
+                if (personalKey === false) return;
 
                 const result = await AIService.chat(req.user.id, message, month || null, timeframe || 'All',
-                    extractPersonalKey(req));
+                    personalKey, provider, conversationHistory);
 
                 res.json({
                     success: true,
@@ -103,25 +170,22 @@ const aiController = {
                     }
                 });
             } catch (error) {
-                if (error.message.includes('Gemini API failed')) {
-                    return res.status(503).json({
-                        success: false,
-                        message: 'AI service is temporarily unavailable. Please try again in a moment.',
-                        detail: error.message
-                    });
-                }
-                next(error);
+                handleAIError(error, res, next);
             }
         }
     ],
 
     /**
      * POST /api/ai/scan-bill
-     * Parse receipt / invoice image with Gemini Multimodal Vision
+     * Parse receipt / invoice image with the selected provider's vision adapter
      */
     async scanBill(req, res, next) {
         try {
             const { image, mimeType, refresh } = req.body;
+            const provider = getProvider(req, res);
+            if (!provider) return;
+            const personalKey = checkProviderConfiguration(req, res, provider);
+            if (personalKey === false) return;
             if (!image) {
                 return res.status(400).json({
                     success: false,
@@ -136,8 +200,8 @@ const aiController = {
                 image,
                 mimeType || 'image/jpeg',
                 categoryNames,
-                extractPersonalKey(req),
-                { userId: req.user.id, refresh: Boolean(refresh) }
+                personalKey,
+                { userId: req.user.id, refresh: Boolean(refresh), provider }
             );
 
             res.json({
@@ -146,11 +210,7 @@ const aiController = {
                 data: result
             });
         } catch (error) {
-            console.error('[AI CONTROLLER] Bill scan failed:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to scan bill. Please ensure image is clear or enter manually.'
-            });
+            handleAIError(error, res, next);
         }
     },
 
@@ -161,6 +221,10 @@ const aiController = {
     async parseSms(req, res, next) {
         try {
             const { messages, refresh } = req.body;
+            const provider = getProvider(req, res);
+            if (!provider) return;
+            const personalKey = checkProviderConfiguration(req, res, provider);
+            if (personalKey === false) return;
             if (!Array.isArray(messages) || messages.length === 0) {
                 return res.status(400).json({
                     success: false,
@@ -174,8 +238,8 @@ const aiController = {
             const result = await AIService.parseSmsMessages(
                 messages,
                 categoryNames,
-                extractPersonalKey(req),
-                { userId: req.user.id, refresh: Boolean(refresh) }
+                personalKey,
+                { userId: req.user.id, refresh: Boolean(refresh), provider }
             );
 
             res.json({
@@ -184,11 +248,7 @@ const aiController = {
                 data: result
             });
         } catch (error) {
-            console.error('[AI CONTROLLER] SMS parse failed:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to parse SMS messages. Please try again.'
-            });
+            handleAIError(error, res, next);
         }
     }
 };

@@ -3,6 +3,7 @@
  * Pre-configured with environment-based base URL and JWT interceptor
  */
 import axios from 'axios';
+import { getAIRequestHeaders } from '../ai/providerSettings';
 
 // Use VITE_API_URL from environment or fallback to localhost development URL
 const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -19,6 +20,10 @@ API.interceptors.request.use((config) => {
     const token = localStorage.getItem('token');
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
+    }
+    if (config.url?.startsWith('/ai/')) {
+        config.headers = config.headers || {};
+        Object.assign(config.headers, getAIRequestHeaders());
     }
     return config;
 }, (error) => {

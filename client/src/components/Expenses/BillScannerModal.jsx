@@ -117,9 +117,15 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
             );
         } catch (err) {
             if (refresh) {
-                toast.error('Could not refresh the receipt with AI. Previous details were kept.');
+                const message = err.response?.data?.message;
+                toast.error(message
+                    ? `${message} Previous details were kept.`
+                    : 'Could not refresh the receipt with AI. Previous details were kept.');
             } else {
-                toast.error('Could not auto-read the bill. You can still enter details manually.');
+                toast.error(
+                    err.response?.data?.message ||
+                    'Could not auto-read the bill. You can still enter details manually.'
+                );
                 setStep(2); // Allow manual entry even if scanning had issues
             }
         } finally {

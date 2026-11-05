@@ -1,5 +1,6 @@
 import AnalysisPanel from '../components/AI/AnalysisPanel';
 import ChatAssistant from '../components/AI/ChatAssistant';
+import AIProviderSettings from '../components/AI/AIProviderSettings';
 
 const AIInsightsPage = () => {
     return (
@@ -14,6 +15,8 @@ const AIInsightsPage = () => {
                     Practical financial guidance grounded strictly in your recorded transactions and budget plan.
                 </p>
             </div>
+
+            <AIProviderSettings />
 
             {/* Responsive 2-Column Grid — fixed height so inner flex columns can scroll */}
             <div style={{ 

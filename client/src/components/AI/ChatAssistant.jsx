@@ -41,7 +41,11 @@ const ChatAssistant = () => {
         try {
             const res = await API.post('/ai/chat', { 
                 message: text,
-                timeframe: contextTimeframe 
+                timeframe: contextTimeframe,
+                history: messages
+                    .slice(1)
+                    .slice(-10)
+                    .map(({ role, content }) => ({ role, content }))
             });
             const aiReply = res.data?.data?.reply || 'I reviewed your data, but could not produce a response. Please try asking again.';
             setMessages(prev => [...prev, { role: 'assistant', content: aiReply }]);

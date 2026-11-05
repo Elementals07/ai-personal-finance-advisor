@@ -1,6 +1,6 @@
 # 🤖 AI Personal Finance Advisor
 
-A production-quality, full-stack personal finance management system with autonomous AI financial intelligence, built with React, Node.js, MySQL, and Google Gemini.
+A full-stack personal finance management system with AI financial intelligence, built with React, Node.js, MySQL, Velona, and Google Gemini.
 
 ---
 
@@ -19,13 +19,13 @@ A production-quality, full-stack personal finance management system with autonom
 
 - **🔐 Authentication** — JWT & bcrypt auth with automatic profile initialization.
 - **💸 Expense Management** — Full CRUD operations with categories, dates, pagination, and multi-filters.
-- **📸 AI Bill & Receipt Scanner (New)**:
-  - Multimodal OCR via **Gemini 2.5 Flash**.
+- **📸 AI Bill & Receipt Scanner**:
+  - Multimodal OCR via the selected AI provider.
   - Extracts Merchant, Total Amount, Category, and Itemized Line Items.
   - **Smart Date Resolution**: Auto-detects bill date from receipt; defaults to current date if missing/unreadable.
   - **Manual Override**: Native date picker lets user override the bill date before saving.
   - **Multi-Category Split**: Option to split supermarket receipts into multiple category transactions at once (`/api/expenses/batch`).
-- **🤖 Autonomous AI Financial Advisor (Gemini Function Calling)**:
+- **🤖 AI Financial Advisor (provider-compatible function calling)**:
   - Not limited to static snapshots: AI calls **7 real-time SQL tools** on demand (`get_period_summary`, `get_category_history`, `get_annual_breakdown`, etc.).
   - Can answer complex queries (e.g. *"Analyze first 4 months"*, *"Analyze food budget for whole year"*, *"Can I afford X?"*).
   - **3-Month Rolling Baseline**: Flags category spending spikes (>30%) and micro-leakages (small repeated spends).
@@ -55,7 +55,8 @@ A production-quality, full-stack personal finance management system with autonom
                                  │ (Bi-directional Function Calling & OCR)
                                  ▼
                         ┌──────────────────┐
-                        │ Gemini 2.5 Flash │
+                        │ Velona (default) │
+                        │ Google Gemini    │
                         └──────────────────┘
 ```
 
@@ -66,7 +67,7 @@ A production-quality, full-stack personal finance management system with autonom
 ### Prerequisites
 - Node.js 20+
 - MySQL 8.0+ / 9.0+ (Fully compatible with `ONLY_FULL_GROUP_BY`)
-- Google Gemini API key
+- Velona API key (or a Gemini key for Gemini-only use)
 
 ### 1. Database Setup
 ```bash
@@ -83,7 +84,28 @@ DB_PASSWORD=your_mysql_password
 DB_NAME=finance_advisor
 JWT_SECRET=your-jwt-secret
 GEMINI_API_KEY_1=AIzaSy...
+VELONA_API_KEY=your_backend_only_velona_key
+AI_USD_TO_INR_RATE=your_current_usd_to_inr_rate
 ```
+
+`VELONA_API_KEY` belongs only in the backend root `.env`; never put it in a
+`VITE_` variable, client source, or Android package. `.env` is ignored by Git.
+Velona is selected by default with model `qwen/qwen3.7-flash`. On the AI Advisor
+page, switch **Use Velona AI** off to use Google Gemini. A personal Gemini key
+entered in AI Settings remains in memory only for the current app session and is
+sent only while Gemini is selected.
+
+The usage panel shows local request/token totals and estimated Velona charges
+using the configured model rates. Set `AI_USD_TO_INR_RATE` to a current conversion
+rate to display an INR estimate against the initial ₹10 budget. Estimates are
+not the provider wallet balance or an exact bill. No billing API is queried.
+
+Apply the usage-ledger migration once to an existing database:
+```powershell
+mysql -u root -p finance_advisor < server/migrations/004_ai_usage_tracking.sql
+```
+The backend is the provider proxy for web and Android clients; configure Android
+to use the deployed backend URL. Do not place a private Velona key in the APK.
 
 ### 3. Start Backend
 ```powershell
@@ -117,9 +139,12 @@ Runs on `http://localhost:5173`
 │   │   ├── Category.js
 │   │   └── AIInsightsCache.js
 │   ├── services/
-│   │   ├── aiTools.js                     # 7 Gemini tool declarations, executors & system prompt
-│   │   ├── aiService.js                   # Gemini 2.5 Flash, multi-turn tool loop & vision OCR
+│   │   ├── aiTools.js                     # Shared tool declarations, executors & system prompt
+│   │   ├── aiService.js                   # Provider routing, prompts, cache and feature logic
+│   │   ├── velonaAdapter.js                # OpenAI-compatible text, vision and tool adapter
 │   │   └── dataProcessingService.js       # Baselines, anomaly delta matrix, health signals
+│   ├── config/aiPricing.js                # Central model rates, local budget and optional FX rate
+│   ├── models/AIUsage.js                  # Per-request local usage ledger
 │   ├── controllers/
 │   │   ├── aiController.js                # Analysis, chat, scan-bill endpoints
 │   │   ├── expenseController.js           # CRUD & batch creation

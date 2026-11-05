@@ -7,6 +7,9 @@ const SENSITIVE_KEYS = new Set([
     'key',
     'apikey',
     'api_key',
+    'gemini_api_key',
+    'velona_api_key',
+    'x_gemini_key',
     'token',
     'authorization',
     'password',
@@ -39,7 +42,8 @@ function sanitize(value, depth = 0) {
     if (typeof value === 'object') {
         const safe = {};
         for (const [key, item] of Object.entries(value)) {
-            safe[key] = SENSITIVE_KEYS.has(key.toLowerCase())
+            const normalizedKey = key.toLowerCase().replace(/-/g, '_');
+            safe[key] = SENSITIVE_KEYS.has(normalizedKey)
                 ? '[redacted]'
                 : sanitize(item, depth + 1);
         }
