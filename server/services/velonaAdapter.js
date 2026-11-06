@@ -59,7 +59,7 @@ function retryAfterMs(value) {
 }
 
 function readUsage(body) {
-    const usage = body?.usage;
+    const usage = body?.usage || body?.data?.usage;
     if (!usage || typeof usage !== 'object') {
         return { inputTokens: 0, outputTokens: 0, totalTokens: 0, usageAvailable: false };
     }
@@ -73,6 +73,55 @@ function readUsage(body) {
         outputTokens,
         totalTokens: Number(usage.total_tokens) || inputTokens + outputTokens,
         usageAvailable: hasInput || hasOutput
+    };
+}
+
+function textFromContent(content) {
+    if (typeof content === 'string') return content;
+    if (content && typeof content === 'object' && !Array.isArray(content)) {
+        if (typeof content.text === 'string') return content.text;
+        if (typeof content.content === 'string') return content.content;
+        return '';
+    }
+    if (!Array.isArray(content)) return '';
+    return content
+        .map(part => {
+            if (typeof part === 'string') return part;
+            if (!part || typeof part !== 'object') return '';
+            if (typeof part.text === 'string') return part.text;
+            if (typeof part.content === 'string') return part.content;
+            return '';
+        })
+        .filter(Boolean)
+        .join('\n');
+}
+
+function getResponseMessage(body) {
+    const choice = body?.choices?.[0];
+    if (choice?.message && typeof choice.message === 'object') {
+        return {
+            message: {
+                ...choice.message,
+                content: textFromContent(choice.message.content)
+            },
+            shape: 'openai-chat-completion',
+            finishReason: choice.finish_reason || null
+        };
+    }
+
+    const nativeOutput = body?.data?.output ?? body?.output;
+    if (typeof nativeOutput === 'string' || Array.isArray(nativeOutput)) {
+        return {
+            message: { role: 'assistant', content: textFromContent(nativeOutput) },
+            shape: 'velona-inference-run',
+            finishReason: body?.data?.finish || body?.finish || null
+        };
+    }
+
+    return {
+        message: null,
+        shape: body?.data ? 'unknown-data-envelope' : 'unknown',
+        finishReason: null
     };
 }
 
@@ -137,6 +186,13 @@ function responseError(status, body) {
     return new AIProviderError(status, message, `http_${status}`);
 }
 
+function safeProviderErrorCode(body) {
+    const code = body?.error?.code || body?.code;
+    return typeof code === 'string' && /^[a-z0-9_-]{1,48}$/i.test(code)
+        ? code
+        : 'provider_error';
+}
+
 async function request({ feature, messages, tools, json = false, temperature = 0.2, maxOutputTokens = 4096, userId }) {
     const apiKey = process.env.VELONA_API_KEY;
     if (!apiKey || !apiKey.trim()) {
@@ -154,6 +210,20 @@ async function request({ feature, messages, tools, json = false, temperature = 0
     };
     if (json) payload.response_format = { type: 'json_object' };
     if (tools?.length) payload.tools = convertTools(tools);
+    const imageParts = messages.flatMap(message => (
+        Array.isArray(message.content)
+            ? message.content.filter(part => part?.type === 'image_url')
+            : []
+    ));
+    logAiEvent('velona.request', {
+        feature,
+        endpoint: 'openai-chat-completions',
+        model: AI_PRICING.velona.model,
+        imageCount: imageParts.length,
+        imageMimeTypes: imageParts.map(part => (
+            /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(part.image_url?.url || '')?.[1] || 'unknown'
+        ))
+    });
 
     let lastError;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -177,11 +247,23 @@ async function request({ feature, messages, tools, json = false, temperature = 0
                 clearTimeout(timeout);
             }
 
-            body = await response.json().catch(() => null);
+            const responseText = await response.text();
+            try {
+                body = responseText ? JSON.parse(responseText) : null;
+            } catch {
+                body = null;
+            }
             const durationMs = Date.now() - startedAt;
             const { inputTokens, outputTokens, totalTokens, usageAvailable } = readUsage(body);
 
             if (!response.ok) {
+                logAiEvent('velona.failure', {
+                    feature,
+                    statusCode: response.status,
+                    responseShape: body?.error ? 'openai-error' : body?.data ? 'native-error-envelope' : 'unknown',
+                    errorCode: safeProviderErrorCode(body),
+                    durationMs
+                });
                 const error = responseError(response.status, body);
                 await recordUsage(userId, {
                     feature,
@@ -231,10 +313,61 @@ async function request({ feature, messages, tools, json = false, temperature = 0
 
             serviceState.consecutive503s = 0;
             serviceState.unavailableUntil = 0;
-            const choice = body?.choices?.[0];
-            const message = choice?.message;
+            if (!body || typeof body !== 'object') {
+                logAiEvent('velona.invalid-response', {
+                    feature,
+                    statusCode: response.status,
+                    responseBytes: Buffer.byteLength(responseText || ''),
+                    contentType: response.headers.get('content-type') || 'unknown',
+                    durationMs
+                });
+                await recordUsage(userId, {
+                    feature, durationMs, statusCode: response.status,
+                    inputTokens, outputTokens, totalTokens, usageAvailable
+                });
+                throw new AIProviderError(502, 'Velona returned an unreadable response. Please retry.', 'invalid_response');
+            }
+
+            const { message, shape, finishReason } = getResponseMessage(body);
+            if (feature === 'receipt-scan' && String(finishReason).toLowerCase() === 'length') {
+                logAiEvent('velona.truncated-response', {
+                    feature,
+                    statusCode: response.status,
+                    responseShape: shape,
+                    finishReason,
+                    inputTokens,
+                    outputTokens,
+                    durationMs
+                });
+                await recordUsage(userId, {
+                    feature, inputTokens, outputTokens, totalTokens, durationMs, statusCode: 200,
+                    usageAvailable
+                });
+                throw new AIProviderError(
+                    502,
+                    'Velona truncated the receipt response at the output token limit. Please retry the scan.',
+                    'output_truncated'
+                );
+            }
             if (!message || (!message.content && !message.tool_calls?.length)) {
-                const error = new AIProviderError(502, 'Velona returned an empty response. Please retry.');
+                logAiEvent('velona.empty-response', {
+                    feature,
+                    statusCode: response.status,
+                    responseShape: shape,
+                    responseKeys: Object.keys(body).slice(0, 12),
+                    choiceCount: Array.isArray(body.choices) ? body.choices.length : null,
+                    finishReason,
+                    outputType: typeof (body?.data?.output ?? body?.output),
+                    hasUsage: usageAvailable,
+                    durationMs
+                });
+                const error = new AIProviderError(
+                    502,
+                    finishReason === 'length'
+                        ? 'Velona truncated the receipt response before returning results. Please retry.'
+                        : 'Velona returned no text for this request. Please retry or use Gemini in AI Settings.',
+                    'empty_response'
+                );
                 await recordUsage(userId, {
                     feature, inputTokens, outputTokens, totalTokens, durationMs, statusCode: 200,
                     usageAvailable
@@ -256,6 +389,15 @@ async function request({ feature, messages, tools, json = false, temperature = 0
             await recordUsage(userId, {
                 feature, inputTokens, outputTokens, totalTokens, durationMs, statusCode: response.status,
                 usageAvailable
+            });
+            logAiEvent('velona.success', {
+                feature,
+                statusCode: response.status,
+                responseShape: shape,
+                finishReason,
+                inputTokens,
+                outputTokens,
+                durationMs
             });
             return message;
         } catch (error) {
@@ -317,7 +459,14 @@ const VelonaAdapter = {
         return typeof message.content === 'string' ? message.content : '';
     },
 
-    async completeJson({ systemPrompt, contents, feature, userId, temperature = 0.2 }) {
+    async completeJson({
+        systemPrompt,
+        contents,
+        feature,
+        userId,
+        temperature = 0.2,
+        maxOutputTokens = 4096
+    }) {
         const messages = [];
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
         for (const content of contents) {
@@ -340,7 +489,7 @@ const VelonaAdapter = {
             }
         }
         const message = await request({
-            feature, userId, messages, json: true, temperature
+            feature, userId, messages, json: true, temperature, maxOutputTokens
         });
         return typeof message.content === 'string' ? message.content : '';
     },

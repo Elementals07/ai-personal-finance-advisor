@@ -98,7 +98,7 @@ const PROVIDER_PROMPT_VERSION = 1;
 
 const RECEIPT_CACHE_FEATURE = 'receipt_scan';
 const SMS_CACHE_FEATURE = 'sms_parse';
-const RECEIPT_PROMPT_VERSION = 2;
+const RECEIPT_PROMPT_VERSION = 3;
 const SMS_PROMPT_VERSION = 2;
 const SMS_CHUNK_SIZE = 15;
 const inFlightAiRequests = new Map();
@@ -227,6 +227,10 @@ async function callProviderJson(provider, options) {
         try {
             return options.parse ? options.parse(text) : text;
         } catch {
+            logAiEvent('velona.structured-response-invalid', {
+                feature: options.feature,
+                attempt: attempt + 1
+            });
             if (attempt === 1) break;
         }
     }
@@ -695,10 +699,7 @@ const AIService = {
             });
         }
 
-        const prompt = `You are an expert OCR receipt and bill parser for an Indian personal finance system.
-Examine this image of a receipt, invoice, or handwritten bill carefully.
-
-Extract and output a valid JSON object with the following fields:
+        const prompt = `You are an OCR receipt parser for an Indian personal finance system. Read the receipt image and return one concise, valid JSON object with exactly these fields:
 1. "merchant": The name of the store, vendor, shop, hospital, or company (e.g. "D-Mart", "Apollo Pharmacy", "Swiggy", "Indian Oil", "More Supermarket"). If unknown, use "Local Store".
 2. "totalAmount": The final total amount paid in Rupees as a number (e.g. 1450.50). Do not include currency symbols.
 3. "billDate": The date printed on the bill in exact "YYYY-MM-DD" format.
@@ -707,13 +708,13 @@ Extract and output a valid JSON object with the following fields:
 4. "dateDetected": true if a date was found on the bill, false if null.
 5. "primaryCategory": The single best category matching one of: [${validCategories}].
 6. "summary": A brief 1-sentence description of what this bill is for (e.g. "Weekly groceries at D-Mart").
-7. "items": An array of individual line items if clearly listed on the bill. For each item:
+7. "items": An array of at most 15 clearly legible line items. For each item:
    - "name": Item description (e.g. "Sunflower Oil 1L")
    - "amount": Price in Rupees (number)
    - "category": Best category from [${validCategories}]
-   If line items are not distinguishable, return an empty array [].
+   If line items are not distinguishable, return an empty array []. If there are more than 15, include only the clearest items; do not omit or estimate the merchant, final total, date, or primary category.
 
-CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
+Return only the JSON object. Do not include markdown, explanations, or extra fields. Keep text values brief.`;
 
         const executeScan = async () => {
             const parsed = await callProviderJson(provider, {
@@ -721,6 +722,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
                 personalKey,
                 userId,
                 temperature: 0.2,
+                maxOutputTokens: 8192,
                 contents: [
                     {
                         role: 'user',
