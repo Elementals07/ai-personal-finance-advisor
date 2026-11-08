@@ -7,6 +7,24 @@ const AIService = require('../services/aiService');
 const Category = require('../models/Category');
 const AIUsage = require('../models/AIUsage');
 
+const MODEL_HEADERS = Object.freeze({
+    chatbot: 'x-ai-model-chatbot',
+    financialAnalysis: 'x-ai-model-financial-analysis',
+    receiptScanning: 'x-ai-model-receipt-scanning',
+    smsTransactionParsing: 'x-ai-model-sms-transaction-parsing'
+});
+
+function getModelSelection(req, res, feature) {
+    const raw = req.get(MODEL_HEADERS[feature]);
+    if (!raw) return null;
+    const model = String(raw).trim();
+    if (!model || model.length > 128) {
+        res.status(400).json({ success: false, message: 'The selected AI model ID is invalid. Update it in AI Settings.' });
+        return false;
+    }
+    return model;
+}
+
 /** Sanitize an optional personal Gemini key sent by the client */
 function extractPersonalKey(req) {
     const raw = req.get('x-gemini-key');
@@ -70,16 +88,39 @@ const aiController = {
             const provider = getProvider(req, res);
             if (!provider) return;
             const [usage] = await Promise.all([AIUsage.getSummary(req.user.id)]);
+            const aiConfig = AIService.getConfig();
+            const inrRate = Number(aiConfig.pricing?.usdToInrRate);
+            const usageWithInr = usage
+                ? {
+                    ...usage,
+                    estimatedCostInr: usage.estimatedCostUsd != null &&
+                        Number.isFinite(inrRate) && inrRate > 0
+                        ? Number(usage.estimatedCostUsd) * inrRate
+                        : null
+                }
+                : usage;
+
             res.json({
                 success: true,
                 data: {
-                    ...AIService.getConfig(),
+                    ...aiConfig,
                     activeProvider: provider,
-                    usage
+                    usage: usageWithInr
                 }
             });
         } catch (error) {
             next(error);
+        }
+    },
+
+    async models(req, res, next) {
+        try {
+            const models = await AIService.getVelonaModels({
+                refresh: req.query.refresh === 'true'
+            });
+            res.json({ success: true, data: { models } });
+        } catch (error) {
+            handleAIError(error, res, next);
         }
     },
 
@@ -95,13 +136,16 @@ const aiController = {
             if (!provider) return;
             const personalKey = checkProviderConfiguration(req, res, provider);
             if (personalKey === false) return;
+            const model = getModelSelection(req, res, 'financialAnalysis');
+            if (model === false) return;
             const result = await AIService.generateAnalysis(
                 req.user.id,
                 month || null,
                 refresh || false,
                 ['month', 'quarter', 'year'].includes(timeframe) ? timeframe : 'month',
                 personalKey,
-                provider
+                provider,
+                model
             );
 
             res.json({
@@ -157,9 +201,11 @@ const aiController = {
                 if (!provider) return;
                 const personalKey = checkProviderConfiguration(req, res, provider);
                 if (personalKey === false) return;
+                const model = getModelSelection(req, res, 'chatbot');
+                if (model === false) return;
 
                 const result = await AIService.chat(req.user.id, message, month || null, timeframe || 'All',
-                    personalKey, provider, conversationHistory);
+                    personalKey, provider, conversationHistory, model);
 
                 res.json({
                     success: true,
@@ -186,6 +232,8 @@ const aiController = {
             if (!provider) return;
             const personalKey = checkProviderConfiguration(req, res, provider);
             if (personalKey === false) return;
+            const model = getModelSelection(req, res, 'receiptScanning');
+            if (model === false) return;
             if (!image) {
                 return res.status(400).json({
                     success: false,
@@ -201,7 +249,7 @@ const aiController = {
                 mimeType || 'image/jpeg',
                 categoryNames,
                 personalKey,
-                { userId: req.user.id, refresh: Boolean(refresh), provider }
+                { userId: req.user.id, refresh: Boolean(refresh), provider, model }
             );
 
             res.json({
@@ -225,6 +273,8 @@ const aiController = {
             if (!provider) return;
             const personalKey = checkProviderConfiguration(req, res, provider);
             if (personalKey === false) return;
+            const model = getModelSelection(req, res, 'smsTransactionParsing');
+            if (model === false) return;
             if (!Array.isArray(messages) || messages.length === 0) {
                 return res.status(400).json({
                     success: false,
@@ -239,7 +289,7 @@ const aiController = {
                 messages,
                 categoryNames,
                 personalKey,
-                { userId: req.user.id, refresh: Boolean(refresh), provider }
+                { userId: req.user.id, refresh: Boolean(refresh), provider, model }
             );
 
             res.json({

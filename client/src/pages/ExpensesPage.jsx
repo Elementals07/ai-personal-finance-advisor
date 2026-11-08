@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import API from '../api/axios';
 import ExpenseForm from '../components/Expenses/ExpenseForm';
 import ExpenseList from '../components/Expenses/ExpenseList';
-import BillScannerModal from '../components/Expenses/BillScannerModal';
 import SmsImportModal from '../components/Expenses/SmsImportModal';
 import toast from 'react-hot-toast';
 import { 
@@ -13,18 +12,25 @@ import {
     HiOutlineArrowDownTray
 } from 'react-icons/hi2';
 import { useCategories } from '../hooks/useCategories';
+import { useReceiptScanner } from '../context/receiptScannerStore';
 
 const TIME_FILTERS = ['Today', 'This Week', 'This Month', 'Specific Date', 'All Time'];
 
+const getLocalDateString = (date = new Date()) => {
+    const d = new Date(date);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 10);
+};
+
 const ExpensesPage = () => {
     const { categoryNames } = useCategories();
+    const { openScanner } = useReceiptScanner();
     const [expenses, setExpenses] = useState([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [showForm, setShowForm] = useState(false);
-    const [showScanner, setShowScanner] = useState(false);
     const [showSmsImport, setShowSmsImport] = useState(false);
     const [editExpense, setEditExpense] = useState(null);
     const [deletingId, setDeletingId] = useState(null);
@@ -34,8 +40,8 @@ const ExpensesPage = () => {
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     });
     const [filterCategory, setFilterCategory] = useState('All');
-    const [timeFilter, setTimeFilter] = useState('This Month');
-    const [specificDate, setSpecificDate] = useState(() => new Date().toISOString().slice(0, 10));
+    const [timeFilter, setTimeFilter] = useState('Today');
+    const [specificDate, setSpecificDate] = useState(() => getLocalDateString());
 
     const fetchExpenses = useCallback(async (pageNum = 1, isLoadMore = false) => {
         if (!isLoadMore) setLoading(true);
@@ -46,11 +52,6 @@ const ExpensesPage = () => {
             const params = [];
 
             const now = new Date();
-            const getLocalDateString = (date) => {
-                const d = new Date(date);
-                d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-                return d.toISOString().slice(0, 10);
-            };
 
             if (timeFilter === 'Today') {
                 const today = getLocalDateString(now);
@@ -83,7 +84,7 @@ const ExpensesPage = () => {
             }
 
             setHasMore(newExpenses.length === 25);
-        } catch (err) {
+        } catch {
             toast.error('Failed to load expenses');
         } finally {
             setLoading(false);
@@ -94,6 +95,12 @@ const ExpensesPage = () => {
     useEffect(() => {
         setPage(1);
         fetchExpenses(1, false);
+    }, [fetchExpenses]);
+
+    useEffect(() => {
+        const handleExpensesChanged = () => fetchExpenses(1, false);
+        window.addEventListener('expenses:changed', handleExpensesChanged);
+        return () => window.removeEventListener('expenses:changed', handleExpensesChanged);
     }, [fetchExpenses]);
 
     const handleLoadMore = () => {
@@ -120,7 +127,7 @@ const ExpensesPage = () => {
             setExpenses(prev => prev.filter(e => e.id !== id));
             setDeletingId(null);
             toast.success('Expense deleted');
-        } catch (err) {
+        } catch {
             toast.error('Failed to delete expense');
         }
     };
@@ -146,7 +153,7 @@ const ExpensesPage = () => {
                         <button
                             type="button"
                             className="btn btn-outline"
-                            onClick={() => setShowScanner(true)}
+                            onClick={openScanner}
                             aria-label="Scan bill or receipt"
                         >
                             <HiOutlineCamera aria-hidden="true" />
@@ -277,14 +284,6 @@ const ExpensesPage = () => {
                     editData={editExpense}
                     onSubmit={editExpense ? handleUpdate : handleCreate}
                     onClose={() => { setShowForm(false); setEditExpense(null); }}
-                />
-            )}
-
-            {/* Guided Bill Scanner Modal */}
-            {showScanner && (
-                <BillScannerModal
-                    onClose={() => setShowScanner(false)}
-                    onSuccess={() => fetchExpenses(1, false)}
                 />
             )}
 

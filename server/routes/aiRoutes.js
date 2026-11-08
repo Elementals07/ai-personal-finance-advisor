@@ -11,6 +11,7 @@ const auth = require('../middleware/auth');
 router.use(auth);
 
 router.get('/config', aiController.config);
+router.get('/models', aiController.models);
 router.post('/analyze', aiController.analyze);
 router.post('/chat', aiController.chat);
 router.post('/scan-bill', aiController.scanBill);

@@ -1,11 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ReceiptScannerProvider } from './context/ReceiptScannerContext';
 import Layout from './components/Layout/Layout';
 import DashboardPage from './pages/DashboardPage';
 import ExpensesPage from './pages/ExpensesPage';
 import BudgetPage from './pages/BudgetPage';
 import AIInsightsPage from './pages/AIInsightsPage';
+import AISettingsPage from './pages/AISettingsPage';
 import CategoriesPage from './pages/CategoriesPage';
 import SavingsPage from './pages/SavingsPage';
 import GuidePage from './pages/GuidePage';
@@ -87,7 +89,7 @@ function App() {
                     <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
 
                     {/* Protected Routes inside Global Layout */}
-                    <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+                    <Route path="/" element={<ProtectedRoute><ReceiptScannerProvider><Layout /></ReceiptScannerProvider></ProtectedRoute>}>
                         <Route index element={<DashboardPage />} />
                         <Route path="expenses" element={<ExpensesPage />} />
                         <Route path="budget" element={<BudgetPage />} />
@@ -98,6 +100,7 @@ function App() {
                         {/* Both /ai-insights and /ai-advisor supported */}
                         <Route path="ai-insights" element={<AIInsightsPage />} />
                         <Route path="ai-advisor" element={<AIInsightsPage />} />
+                        <Route path="ai-settings" element={<AISettingsPage />} />
                         <Route path="guide" element={<GuidePage />} />
                     </Route>
 

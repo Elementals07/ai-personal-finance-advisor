@@ -1,14 +1,15 @@
-const VELONA_MODEL = 'qwen/qwen3.7-flash';
+const { AI_MODELS, GEMINI_MODEL, DEFAULT_MODEL } = require('./aiModels');
 const USD_TO_INR_RATE = Number(process.env.AI_USD_TO_INR_RATE);
 
 const AI_PRICING = {
     velona: {
-        model: VELONA_MODEL,
+        model: AI_MODELS.financialAnalysis,
+        pricedModel: DEFAULT_MODEL,
         inputUsdPerMillionTokens: 0.035,
         outputUsdPerMillionTokens: 0.15
     },
     gemini: {
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         inputUsdPerMillionTokens: null,
         outputUsdPerMillionTokens: null
     },

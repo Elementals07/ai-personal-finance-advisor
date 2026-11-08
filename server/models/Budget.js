@@ -17,11 +17,24 @@ const Budget = {
             await connection.beginTransaction();
             
             for (const { category, amount } of allocations) {
+                const targetCategory = category || 'All';
+                const numericAmount = Number(amount);
+
+                // A cleared limit (empty input or zero) deletes the saved row so
+                // the Budget page does not keep showing a stale limit.
+                if (targetCategory !== 'All' && (!Number.isFinite(numericAmount) || numericAmount <= 0)) {
+                    await connection.execute(
+                        'DELETE FROM budgets WHERE user_id = ? AND month = ? AND category = ?',
+                        [userId, month, targetCategory]
+                    );
+                    continue;
+                }
+
                 await connection.execute(
                     `INSERT INTO budgets (user_id, month, category, budget_amount) 
                      VALUES (?, ?, ?, ?)
                      ON DUPLICATE KEY UPDATE budget_amount = VALUES(budget_amount)`,
-                    [userId, month, category || 'All', amount]
+                    [userId, month, targetCategory, numericAmount]
                 );
             }
             

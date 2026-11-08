@@ -1,4 +1,5 @@
-const { AI_PRICING, estimateCostUsd } = require('../config/aiPricing');
+const { AI_PRICING } = require('../config/aiPricing');
+const { getDefaultModel, getConfiguredModels } = require('../config/aiModels');
 const AIUsage = require('../models/AIUsage');
 const { logAiEvent } = require('../utils/aiLogger');
 
@@ -7,7 +8,12 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 2;
 const MAX_RETRY_WAIT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 45_000;
+const MODEL_CATALOGUE_URL = 'https://velona.in/v1/models';
+const MODEL_CATALOGUE_TTL_MS = 5 * 60 * 1000;
+const MODEL_CATALOGUE_TIMEOUT_MS = 15_000;
 const serviceState = { consecutive503s: 0, unavailableUntil: 0 };
+let modelCatalogueCache = { models: null, expiresAt: 0 };
+let modelCataloguePromise = null;
 
 class AIProviderError extends Error {
     constructor(statusCode, message, code = 'provider_error') {
@@ -162,16 +168,32 @@ function convertTools(declarations = []) {
     }));
 }
 
-function recordUsage(userId, data) {
+function estimateModelCost(model, inputTokens, outputTokens) {
+    const catalogueModel = Date.now() < modelCatalogueCache.expiresAt
+        ? modelCatalogueCache.models?.find(item => item.id === model)
+        : null;
+    const pricing = catalogueModel?.pricing;
+    if (pricing?.inputUsdPerMillionTokens != null && pricing?.outputUsdPerMillionTokens != null) {
+        return ((inputTokens * pricing.inputUsdPerMillionTokens) +
+            (outputTokens * pricing.outputUsdPerMillionTokens)) / 1_000_000;
+    }
+    if (model === AI_PRICING.velona.pricedModel) {
+        return ((inputTokens * AI_PRICING.velona.inputUsdPerMillionTokens) +
+            (outputTokens * AI_PRICING.velona.outputUsdPerMillionTokens)) / 1_000_000;
+    }
+    return null;
+}
+
+function recordUsage(userId, model, data) {
     if (!userId) return Promise.resolve();
     const { usageAvailable, ...record } = data;
     return AIUsage.record({
         ...record,
         userId,
         provider: 'velona',
-        model: AI_PRICING.velona.model,
+        model,
         estimatedCostUsd: usageAvailable
-            ? estimateCostUsd('velona', data.inputTokens || 0, data.outputTokens || 0)
+            ? estimateModelCost(model, data.inputTokens || 0, data.outputTokens || 0)
             : null
     }).catch(error => {
         logAiEvent('ai-usage.record-failed', {
@@ -193,7 +215,7 @@ function safeProviderErrorCode(body) {
         : 'provider_error';
 }
 
-async function request({ feature, messages, tools, json = false, temperature = 0.2, maxOutputTokens = 4096, userId }) {
+async function request({ feature, messages, tools, json = false, temperature = 0.2, maxOutputTokens = 4096, userId, model }) {
     const apiKey = process.env.VELONA_API_KEY;
     if (!apiKey || !apiKey.trim()) {
         throw new AIProviderError(503, 'Velona is not configured. Add VELONA_API_KEY to the backend .env file.');
@@ -202,8 +224,23 @@ async function request({ feature, messages, tools, json = false, temperature = 0
         throw new AIProviderError(503, 'Velona is temporarily unavailable after repeated service errors. Try again later or switch providers in AI Settings.');
     }
 
+    const selectedModel = model || getDefaultModel(feature);
+    const catalogueModel = Date.now() < modelCatalogueCache.expiresAt
+        ? modelCatalogueCache.models?.find(item => item.id === selectedModel)
+        : null;
+    const requiredCapabilities = feature === 'chat'
+        ? ['tools']
+        : feature === 'receipt-scan'
+            ? ['vision', 'json']
+            : json ? ['json'] : [];
+    for (const capability of requiredCapabilities) {
+        if (catalogueModel?.capabilities?.[capability] === false) {
+            throw new AIProviderError(422, `The selected Velona model does not support ${capability} for ${feature}. Choose another model in AI Settings.`, 'unsupported_capability');
+        }
+    }
+
     const payload = {
-        model: AI_PRICING.velona.model,
+        model: selectedModel,
         messages,
         temperature,
         max_tokens: maxOutputTokens
@@ -218,7 +255,7 @@ async function request({ feature, messages, tools, json = false, temperature = 0
     logAiEvent('velona.request', {
         feature,
         endpoint: 'openai-chat-completions',
-        model: AI_PRICING.velona.model,
+        model: selectedModel,
         imageCount: imageParts.length,
         imageMimeTypes: imageParts.map(part => (
             /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(part.image_url?.url || '')?.[1] || 'unknown'
@@ -265,7 +302,7 @@ async function request({ feature, messages, tools, json = false, temperature = 0
                     durationMs
                 });
                 const error = responseError(response.status, body);
-                await recordUsage(userId, {
+                await recordUsage(userId, selectedModel, {
                     feature,
                     inputTokens,
                     outputTokens,
@@ -321,7 +358,7 @@ async function request({ feature, messages, tools, json = false, temperature = 0
                     contentType: response.headers.get('content-type') || 'unknown',
                     durationMs
                 });
-                await recordUsage(userId, {
+                await recordUsage(userId, selectedModel, {
                     feature, durationMs, statusCode: response.status,
                     inputTokens, outputTokens, totalTokens, usageAvailable
                 });
@@ -339,7 +376,7 @@ async function request({ feature, messages, tools, json = false, temperature = 0
                     outputTokens,
                     durationMs
                 });
-                await recordUsage(userId, {
+                await recordUsage(userId, selectedModel, {
                     feature, inputTokens, outputTokens, totalTokens, durationMs, statusCode: 200,
                     usageAvailable
                 });
@@ -368,7 +405,7 @@ async function request({ feature, messages, tools, json = false, temperature = 0
                         : 'Velona returned no text for this request. Please retry or use Gemini in AI Settings.',
                     'empty_response'
                 );
-                await recordUsage(userId, {
+                await recordUsage(userId, selectedModel, {
                     feature, inputTokens, outputTokens, totalTokens, durationMs, statusCode: 200,
                     usageAvailable
                 });
@@ -379,14 +416,14 @@ async function request({ feature, messages, tools, json = false, temperature = 0
                 typeof call.function.arguments !== 'string'
             )) {
                 const error = new AIProviderError(502, 'Velona returned an invalid tool call. Please retry.');
-                await recordUsage(userId, {
+                await recordUsage(userId, selectedModel, {
                     feature, inputTokens, outputTokens, totalTokens, durationMs, statusCode: 200,
                     usageAvailable
                 });
                 throw error;
             }
 
-            await recordUsage(userId, {
+            await recordUsage(userId, selectedModel, {
                 feature, inputTokens, outputTokens, totalTokens, durationMs, statusCode: response.status,
                 usageAvailable
             });
@@ -409,7 +446,7 @@ async function request({ feature, messages, tools, json = false, temperature = 0
                 friendlyError(timedOut ? 408 : 0),
                 timedOut ? 'timeout' : 'network_error'
             );
-            await recordUsage(userId, {
+            await recordUsage(userId, selectedModel, {
                 feature, durationMs, statusCode: timedOut ? 408 : null
             });
             lastError = mapped;
@@ -441,17 +478,136 @@ function imageDataUrl(data, mimeType) {
 const VelonaAdapter = {
     model: AI_PRICING.velona.model,
     AIProviderError,
+    async getModels({ refresh = false } = {}) {
+        if (!refresh && modelCatalogueCache.models && Date.now() < modelCatalogueCache.expiresAt) {
+            return modelCatalogueCache.models;
+        }
+        if (modelCataloguePromise) return modelCataloguePromise;
+
+        modelCataloguePromise = (async () => {
+            const apiKey = process.env.VELONA_API_KEY;
+            if (!apiKey?.trim()) {
+                throw new AIProviderError(503, 'Velona is not configured. Add VELONA_API_KEY to the backend .env file.');
+            }
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), MODEL_CATALOGUE_TIMEOUT_MS);
+            let response;
+            try {
+                response = await fetch(MODEL_CATALOGUE_URL, {
+                    headers: { Authorization: `Bearer ${apiKey.trim()}` },
+                    signal: controller.signal
+                });
+            } catch (error) {
+                throw new AIProviderError(
+                    503,
+                    error.name === 'AbortError'
+                        ? 'The Velona model catalogue request timed out. Please try again.'
+                        : 'Could not connect to the Velona model catalogue. Please try again.'
+                );
+            } finally {
+                clearTimeout(timeout);
+            }
+            if (!response.ok) {
+                throw new AIProviderError(response.status, 'Could not retrieve the Velona model catalogue.');
+            }
+
+            let body;
+            try {
+                body = await response.json();
+            } catch {
+                throw new AIProviderError(502, 'Velona returned an unreadable model catalogue.');
+            }
+            const entries = Array.isArray(body) ? body : (body?.data || body?.models);
+            if (!Array.isArray(entries)) {
+                throw new AIProviderError(502, 'Velona returned an invalid model catalogue.');
+            }
+
+            const models = entries
+                .filter(item => item && typeof item.id === 'string' && item.id.trim())
+                .map(item => {
+                    const capabilities = item.capabilities || {};
+                    const rawInputModalities = item.architecture?.input_modalities || item.input_modalities || [];
+                    const inputModalities = Array.isArray(rawInputModalities)
+                        ? rawInputModalities.map(value => String(value).toLowerCase())
+                        : (typeof rawInputModalities === 'string' ? [rawInputModalities.toLowerCase()] : []);
+                    const hasParameterList = Array.isArray(item.supported_parameters);
+                    const parameters = Array.isArray(item.supported_parameters)
+                        ? item.supported_parameters.map(value => String(value).toLowerCase())
+                        : [];
+                    const supported = (...keys) => {
+                        for (const key of keys) {
+                            if (typeof capabilities[key] === 'boolean') return capabilities[key];
+                            if (parameters.includes(key)) return true;
+                        }
+                        return hasParameterList ? false : null;
+                    };
+                    const pricing = item.pricing || {};
+                    const numeric = (...values) => {
+                        for (const value of values) {
+                            const result = Number(value);
+                            if (value !== undefined && value !== null && value !== '' && Number.isFinite(result)) return result;
+                        }
+                        return null;
+                    };
+                    const inputPrice = numeric(pricing.inputUsdPerMillionTokens, pricing.input_per_million);
+                    const outputPrice = numeric(pricing.outputUsdPerMillionTokens, pricing.output_per_million);
+                    const promptPrice = numeric(pricing.prompt);
+                    const completionPrice = numeric(pricing.completion);
+                    const inputUsd = inputPrice ?? (promptPrice === null ? numeric(pricing.input) : promptPrice * 1_000_000);
+                    const outputUsd = outputPrice ?? (completionPrice === null ? numeric(pricing.output) : completionPrice * 1_000_000);
+                    const inrRate = AI_PRICING.usdToInrRate;
+                    const toInr = (usdPrice) => (
+                        usdPrice !== null && inrRate !== null
+                            ? Math.round(usdPrice * inrRate * 1_000_000) / 1_000_000
+                            : null
+                    );
+                    return {
+                        id: item.id.trim(),
+                        name: [item.name, item.display_name].find(value => typeof value === 'string' && value.trim()) || item.id,
+                        provider: [item.provider, item.owned_by, item.vendor].find(value => typeof value === 'string' && value.trim()) ||
+                            (item.id.includes('/') ? item.id.split('/')[0] : 'Velona'),
+                        pricing: {
+                            inputUsdPerMillionTokens: inputUsd,
+                            outputUsdPerMillionTokens: outputUsd,
+                            inputInrPerMillionTokens: toInr(inputUsd),
+                            outputInrPerMillionTokens: toInr(outputUsd)
+                        },
+                        capabilities: {
+                            text: true,
+                            vision: inputModalities.some(modality => ['image', 'image_url'].includes(modality))
+                                ? true
+                                : (inputModalities.length > 0
+                                    ? false
+                                    : supported('vision', 'image', 'images', 'image_url')),
+                            json: supported('json', 'json_mode', 'structured_output', 'response_format', 'json_schema'),
+                            tools: supported('tools', 'tool_calling', 'function_calling', 'tool_choice')
+                        }
+                    };
+                });
+
+            modelCatalogueCache = { models, expiresAt: Date.now() + MODEL_CATALOGUE_TTL_MS };
+            return models;
+        })();
+        try {
+            return await modelCataloguePromise;
+        } finally {
+            modelCataloguePromise = null;
+        }
+    },
     getConfig() {
         return {
             configured: Boolean(process.env.VELONA_API_KEY?.trim()),
-            model: AI_PRICING.velona.model
+            model: AI_PRICING.velona.model,
+            models: getConfiguredModels()
         };
     },
 
-    async completeText({ systemPrompt, userPrompt, feature, userId, maxOutputTokens = 4096, temperature = 0.7 }) {
+    async completeText({ systemPrompt, userPrompt, feature, userId, model, maxOutputTokens = 4096, temperature = 0.7 }) {
         const message = await request({
             feature,
             userId,
+            model,
             messages: asMessages(systemPrompt, [{ role: 'user', content: userPrompt }]),
             temperature,
             maxOutputTokens
@@ -464,6 +620,7 @@ const VelonaAdapter = {
         contents,
         feature,
         userId,
+        model,
         temperature = 0.2,
         maxOutputTokens = 4096
     }) {
@@ -489,7 +646,7 @@ const VelonaAdapter = {
             }
         }
         const message = await request({
-            feature, userId, messages, json: true, temperature, maxOutputTokens
+            feature, userId, model, messages, json: true, temperature, maxOutputTokens
         });
         return typeof message.content === 'string' ? message.content : '';
     },
@@ -499,6 +656,7 @@ const VelonaAdapter = {
         userPrompt,
         userId,
         feature,
+        model,
         declarations,
         executeTool,
         maxTurns = 5,
@@ -516,7 +674,7 @@ Grounding requirements: Never invent financial figures or substitute guesses for
         ]);
         for (let turn = 0; turn < maxTurns; turn++) {
             const assistant = await request({
-                feature, userId, messages, tools: declarations, temperature: 0.7
+                feature, userId, model, messages, tools: declarations, temperature: 0.7
             });
             if (!assistant.tool_calls?.length) {
                 if (typeof assistant.content !== 'string' || !assistant.content.trim()) {

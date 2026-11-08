@@ -43,7 +43,7 @@ const DashboardPage = () => {
             });
             setBudget(budgetRes.data.data);
             setRecentExpenses(recentRes.data.data || []);
-        } catch (err) {
+        } catch {
             toast.error('Failed to load dashboard data');
         } finally {
             setLoading(false);
@@ -52,6 +52,12 @@ const DashboardPage = () => {
 
     useEffect(() => {
         fetchDashboardData();
+    }, [fetchDashboardData]);
+
+    useEffect(() => {
+        const handleExpensesChanged = () => fetchDashboardData();
+        window.addEventListener('expenses:changed', handleExpensesChanged);
+        return () => window.removeEventListener('expenses:changed', handleExpensesChanged);
     }, [fetchDashboardData]);
 
     const handleMonthChange = (e) => {

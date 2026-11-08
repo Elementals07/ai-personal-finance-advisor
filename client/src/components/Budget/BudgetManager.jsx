@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import API from '../../api/axios';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
@@ -12,7 +12,7 @@ import {
 } from 'react-icons/hi2';
 
 const BudgetManager = () => {
-    const { categoryNames, colorMap } = useCategories();
+    const { categoryNames, colorMap, loading: categoriesLoading } = useCategories();
     const { user, updateUser } = useAuth();
     const [budget, setBudget] = useState(null);
     const [allocationsInput, setAllocationsInput] = useState({});
@@ -21,21 +21,23 @@ const BudgetManager = () => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     });
-    const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [validationError, setValidationError] = useState('');
 
-    const fetchBudget = async (month) => {
-        setLoading(true);
+    const fetchBudget = useCallback(async (month) => {
         setValidationError('');
         try {
             const res = await API.get(`/budgets?month=${month}`);
-            setBudget(res.data.data);
-            const currentIncome = res.data.data.budgetAmount || user?.monthly_income || 0;
-            setIncomeInput(currentIncome > 0 ? String(currentIncome) : '');
-            
-            // Populate allocations input
-            const allocs = res.data.data.allocations || {};
+            const data = res.data.data;
+            setBudget(data);
+
+            const savedIncome = data.budgetAmount ?? user?.monthly_income ?? 0;
+            setIncomeInput(Number(savedIncome) > 0 ? String(savedIncome) : '');
+
+            // Populate allocations input for every category. This must run
+            // after categories are loaded, otherwise the saved limits read
+            // back into an empty form and appear as "No limit" on revisit.
+            const allocs = data.allocations || {};
             const initialInputs = {};
             categoryNames.forEach(c => {
                 initialInputs[c] = allocs[c] !== undefined && allocs[c] !== null ? String(allocs[c]) : '';
@@ -44,14 +46,13 @@ const BudgetManager = () => {
         } catch (err) {
             console.error('Failed to fetch budget:', err);
             toast.error('Failed to load budget data');
-        } finally {
-            setLoading(false);
         }
-    };
+    }, [categoryNames, user?.monthly_income]);
 
     useEffect(() => {
+        if (categoriesLoading) return;
         fetchBudget(monthInput);
-    }, [monthInput]);
+    }, [monthInput, categoriesLoading, fetchBudget]);
 
     const handleInputChange = (category, value) => {
         setAllocationsInput(prev => ({
@@ -81,26 +82,34 @@ const BudgetManager = () => {
             return;
         }
 
-        // 2. Validate category allocations
+        // 2. Validate category allocations. Every category is sent so a
+        // cleared field is persisted as a deleted limit instead of a stale row.
         const payload = [];
-        for (const [cat, val] of Object.entries(allocationsInput)) {
-            if (val !== '' && val !== null && val !== undefined) {
-                const amt = parseFloat(val);
-                if (isNaN(amt) || amt < 0) {
-                    setValidationError(`Invalid amount for ${cat}. Values cannot be negative.`);
-                    toast.error(`Please correct the amount for ${cat}`);
-                    return;
-                }
-                if (amt > 0) {
-                    payload.push({ category: cat, amount: amt });
-                }
+        for (const cat of categoryNames) {
+            const val = allocationsInput[cat];
+            const isEmpty = val === '' || val === null || val === undefined;
+            const amt = isEmpty ? 0 : parseFloat(val);
+
+            if (!isEmpty && (isNaN(amt) || amt < 0)) {
+                setValidationError(`Invalid amount for ${cat}. Values cannot be negative.`);
+                toast.error(`Please correct the amount for ${cat}`);
+                return;
             }
+
+            payload.push({ category: cat, amount: isEmpty ? 0 : amt });
+        }
+
+        // Keep the month's income row in sync with the profile so later reads
+        // do not fall back to a stale seeded income value.
+        if (parsedIncome > 0) {
+            payload.push({ category: 'All', amount: parsedIncome });
         }
 
         setSaving(true);
         try {
-            // Update user profile income if changed
-            if (parsedIncome > 0) {
+            // Update user profile income only when it actually changed
+            const profileIncome = Number(user?.monthly_income || 0);
+            if (parsedIncome > 0 && parsedIncome !== profileIncome) {
                 await API.put('/auth/profile', {
                     name: user?.name,
                     monthly_income: parsedIncome
@@ -108,7 +117,8 @@ const BudgetManager = () => {
                 updateUser({ monthly_income: parsedIncome });
             }
 
-            // Save budget allocations if any are specified
+            // Persist the full set of category limits for this month.
+            // Zeros are treated by the API as "remove this limit".
             if (payload.length > 0) {
                 await API.post('/budgets', {
                     allocations: payload,
@@ -117,7 +127,7 @@ const BudgetManager = () => {
             }
 
             toast.success('Budget plan saved successfully!');
-            fetchBudget(monthInput);
+            await fetchBudget(monthInput);
         } catch (err) {
             toast.error(err.response?.data?.message || 'Failed to save budget');
         } finally {
@@ -128,8 +138,8 @@ const BudgetManager = () => {
     const formatCurrency = (val) => '₹' + Math.abs(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
     const totalSpent = budget?.totalSpent || 0;
-    const budgetAmount = budget?.budgetAmount || parsedIncome;
-    const remaining = budgetAmount > 0 ? budgetAmount - totalSpent : 0;
+    const spendingPlanAmount = budget?.spendingPlanAmount || 0;
+    const remaining = budget?.remaining ?? (spendingPlanAmount - totalSpent);
     const percentUsed = budget?.percentUsed || 0;
     const clampedPercent = Math.min(percentUsed, 100);
 
@@ -181,7 +191,7 @@ const BudgetManager = () => {
                     <div className="card-header">
                         <div>
                             <h2 className="card-title">Spending Status for This Month</h2>
-                            <p className="card-subtitle">Actual expenses tracked against your target plan</p>
+                            <p className="card-subtitle">Actual expenses tracked against your category limits</p>
                         </div>
                         <span className={`summary-card-tag ${percentUsed >= 100 ? 'danger' : (percentUsed >= 80 ? 'warning' : 'positive')}`}>
                             {percentUsed >= 100 ? 'Limit Exceeded' : (percentUsed >= 80 ? 'Close to Limit' : 'Within Plan')}
@@ -205,7 +215,7 @@ const BudgetManager = () => {
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
                         <span>Total Spent: <strong className="num">{formatCurrency(totalSpent)}</strong></span>
-                        <span>Monthly Plan: <strong className="num">{formatCurrency(budgetAmount)}</strong></span>
+                        <span>Category Limits: <strong className="num">{formatCurrency(budget?.plannedAmount || spendingPlanAmount)}</strong></span>
                     </div>
                 </div>
             )}

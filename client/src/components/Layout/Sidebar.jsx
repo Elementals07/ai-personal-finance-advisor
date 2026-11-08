@@ -10,6 +10,7 @@ import {
     HiOutlineCircleStack,
     HiOutlineTag,
     HiOutlineQuestionMarkCircle,
+    HiOutlineCog6Tooth,
     HiOutlineChevronLeft,
     HiOutlineChevronRight,
     HiOutlineXMark
@@ -74,6 +75,7 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
                 { to: '/savings', icon: <HiOutlineCircleStack aria-hidden="true" />, label: 'My Savings' },
                 { to: '/sectors', icon: <HiOutlineTag aria-hidden="true" />, label: 'Categories' },
                 { to: '/ai-insights', icon: <HiOutlineSparkles aria-hidden="true" />, label: 'AI Advisor' },
+                { to: '/ai-settings', icon: <HiOutlineCog6Tooth aria-hidden="true" />, label: 'AI Settings' },
                 { to: '/guide', icon: <HiOutlineQuestionMarkCircle aria-hidden="true" />, label: 'How to Use' },
             ]
         },

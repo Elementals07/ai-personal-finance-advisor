@@ -21,12 +21,17 @@ const budgetController = {
             })();
 
             const user = await User.findById(req.user.id);
-            const overallBudget = parseFloat(user.monthly_income) || 0;
-
             const budgetsList = await Budget.findByUserAndMonth(req.user.id, month);
-            const summary = await Transaction.getMonthlySummary(req.user.id, month);
-            
-            // Reformat budgets into an object mapping
+
+            // MySQL is the source of truth. The "All" row (when present) stores
+            // the month's income reference; category rows store the real
+            // spending plan. The user profile is only a fallback for legacy
+            // accounts that have not saved an income row for this month.
+            const overallRow = budgetsList.find(b => b.category === 'All');
+            const overallBudget = parseFloat(overallRow?.budget_amount)
+                || parseFloat(user.monthly_income)
+                || 0;
+
             const allocations = {};
             budgetsList.forEach(b => {
                 if (b.category !== 'All') {
@@ -34,20 +39,35 @@ const budgetController = {
                 }
             });
 
+            const plannedAmount = Object.values(allocations)
+                .reduce((sum, amount) => sum + (Number.isFinite(amount) ? amount : 0), 0);
+            const hasCategoryPlan = plannedAmount > 0;
+            const spendingPlanAmount = hasCategoryPlan ? plannedAmount : overallBudget;
+
+            const summary = await Transaction.getMonthlySummary(req.user.id, month);
             const totalSpent = summary.totalSpending;
+            const remaining = spendingPlanAmount - totalSpent;
 
             res.json({
                 success: true,
                 data: {
                     month,
+                    // Income baseline used by the budget form.
                     budgetAmount: overallBudget,
+                    // Sum of configured category limits (the actual spending plan).
+                    plannedAmount,
+                    // Amount the progress UI compares spending against.
+                    spendingPlanAmount,
                     allocations,
                     totalSpent,
-                    remaining: overallBudget - totalSpent,
-                    percentUsed: overallBudget > 0 ? Math.round((totalSpent / overallBudget) * 100) : 0,
-                    isOverBudget: totalSpent > overallBudget && overallBudget > 0,
+                    remaining,
+                    percentUsed: spendingPlanAmount > 0
+                        ? Math.round((totalSpent / spendingPlanAmount) * 100)
+                        : 0,
+                    isOverBudget: spendingPlanAmount > 0 && totalSpent > spendingPlanAmount,
                     categoryBreakdown: summary.categoryBreakdown,
-                    hasBudget: overallBudget > 0 || budgetsList.length > 0
+                    hasBudget: hasCategoryPlan,
+                    hasIncome: overallBudget > 0
                 }
             });
         } catch (error) {

@@ -21,7 +21,10 @@ API.interceptors.request.use((config) => {
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
-    if (config.url?.startsWith('/ai/')) {
+    const aiEndpoint = config.url?.split('?')[0];
+    if (aiEndpoint?.startsWith('/ai/') &&
+        aiEndpoint !== '/ai/config' &&
+        aiEndpoint !== '/ai/models') {
         config.headers = config.headers || {};
         Object.assign(config.headers, getAIRequestHeaders());
     }

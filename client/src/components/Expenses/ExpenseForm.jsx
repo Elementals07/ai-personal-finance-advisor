@@ -3,11 +3,17 @@ import toast from 'react-hot-toast';
 import { HiOutlineCheck, HiOutlineXMark, HiOutlineTag } from 'react-icons/hi2';
 import { useCategories } from '../../hooks/useCategories';
 
+const toLocalDateString = (date = new Date()) => {
+    const local = new Date(date);
+    local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
+    return local.toISOString().slice(0, 10);
+};
+
 const ExpenseForm = ({ onSubmit, onClose, editData = null }) => {
     const { categoryNames } = useCategories();
     const [amount, setAmount] = useState(editData ? String(editData.amount) : '');
     const [category, setCategory] = useState(editData?.category || (categoryNames[0] || 'Food'));
-    const [date, setDate] = useState(editData?.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+    const [date, setDate] = useState(editData?.date?.slice(0, 10) || toLocalDateString());
     const [description, setDescription] = useState(editData?.description || '');
     const [loading, setLoading] = useState(false);
 
@@ -30,13 +36,13 @@ const ExpenseForm = ({ onSubmit, onClose, editData = null }) => {
     const setQuickDate = (daysAgo) => {
         const d = new Date();
         d.setDate(d.getDate() - daysAgo);
-        setDate(d.toISOString().slice(0, 10));
+        setDate(toLocalDateString(d));
     };
 
-    const isToday = date === new Date().toISOString().slice(0, 10);
+    const isToday = date === toLocalDateString();
     const yesterdayDate = new Date();
     yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-    const isYesterday = date === yesterdayDate.toISOString().slice(0, 10);
+    const isYesterday = date === toLocalDateString(yesterdayDate);
 
     const handleSubmit = async (e) => {
         e.preventDefault();

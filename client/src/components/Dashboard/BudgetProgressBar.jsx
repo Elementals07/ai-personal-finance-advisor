@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { HiOutlineCheckCircle, HiOutlineExclamationTriangle, HiOutlineXCircle, HiOutlineArrowRight } from 'react-icons/hi2';
 
-const BudgetProgressBar = ({ budget, currentMonth }) => {
+const BudgetProgressBar = ({ budget }) => {
     const formatCurrency = (val) => '₹' + Math.abs(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
     if (!budget || !budget.hasBudget) {
@@ -25,7 +25,8 @@ const BudgetProgressBar = ({ budget, currentMonth }) => {
         );
     }
 
-    const { budgetAmount, totalSpent, remaining, percentUsed } = budget;
+    const { spendingPlanAmount, plannedAmount, totalSpent, remaining, percentUsed } = budget;
+    const planAmount = plannedAmount || spendingPlanAmount || 0;
     const clampedPercent = Math.min(percentUsed, 100);
 
     let statusType = 'good';
@@ -69,7 +70,7 @@ const BudgetProgressBar = ({ budget, currentMonth }) => {
                         <strong>{percentUsed}%</strong> of spending plan used
                     </span>
                     <span style={{ fontWeight: 600, color: percentUsed >= 100 ? 'var(--color-danger)' : 'var(--text-primary)' }}>
-                        {percentUsed >= 100 ? `Exceeded by ${formatCurrency(totalSpent - budgetAmount)}` : `${formatCurrency(remaining)} remaining`}
+                        {percentUsed >= 100 ? `Exceeded by ${formatCurrency(totalSpent - planAmount)}` : `${formatCurrency(remaining)} remaining`}
                     </span>
                 </div>
 
@@ -87,7 +88,7 @@ const BudgetProgressBar = ({ budget, currentMonth }) => {
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
                     <span>Spent: <strong className="num">{formatCurrency(totalSpent)}</strong></span>
-                    <span>Plan: <strong className="num">{formatCurrency(budgetAmount)}</strong></span>
+                    <span>Category Limits: <strong className="num">{formatCurrency(planAmount)}</strong></span>
                 </div>
             </div>
 

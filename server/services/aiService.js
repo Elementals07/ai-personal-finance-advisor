@@ -13,6 +13,7 @@ const AIInsightsCache = require('../models/AIInsightsCache');
 const AIContentCache = require('../models/AIContentCache');
 const AIUsage = require('../models/AIUsage');
 const { AI_PRICING, estimateCostUsd } = require('../config/aiPricing');
+const { getDefaultModel } = require('../config/aiModels');
 const VelonaAdapter = require('./velonaAdapter');
 const DataProcessingService = require('./dataProcessingService');
 const { logAiEvent, logAiEventThrottled, shortHash } = require('../utils/aiLogger');
@@ -148,16 +149,16 @@ function parseJsonText(text, fallback = null) {
     }
 }
 
-function getModelFor(provider) {
-    if (provider === 'velona') return VelonaAdapter.model;
+function getModelFor(provider, feature, selectedModel = null) {
+    if (provider === 'velona') return selectedModel || getDefaultModel(feature);
     if (provider === 'gemini') return MODEL;
     throw new Error('Unsupported AI provider selected.');
 }
 
-function providerPromptHash(provider, prompt) {
+function providerPromptHash(provider, prompt, feature, model = null) {
     return AIInsightsCache.hash(JSON.stringify({
         provider,
-        model: getModelFor(provider),
+        model: getModelFor(provider, feature, model),
         promptVersion: PROVIDER_PROMPT_VERSION,
         prompt
     }));
@@ -192,11 +193,11 @@ function getGeminiTokenUsage(response) {
     };
 }
 
-async function recordCacheHit(userId, provider, feature) {
+async function recordCacheHit(userId, provider, feature, model = null) {
     await recordAIUsage({
         userId,
         provider,
-        model: getModelFor(provider),
+        model: getModelFor(provider, feature, model),
         feature,
         statusCode: null,
         cacheHit: true
@@ -491,6 +492,9 @@ const AIService = {
             mode: 'backend'
         };
     },
+    getVelonaModels(options) {
+        return VelonaAdapter.getModels(options);
+    },
 
     /**
      * Generate financial analysis using the selected provider
@@ -499,7 +503,7 @@ const AIService = {
      * @param {string} month - Format: YYYY-MM
      * @returns {object} { analysis, cached, summary }
      */
-    async generateAnalysis(userId, month = null, refresh = false, timeframe = 'month', personalKey = null, provider = 'velona') {
+    async generateAnalysis(userId, month = null, refresh = false, timeframe = 'month', personalKey = null, provider = 'velona', model = null) {
         // Step 1: Generate processed financial summary with delta matrix
         const summary = await DataProcessingService.generateFinancialSummary(
             userId, month, 'All', timeframe
@@ -511,13 +515,13 @@ const AIService = {
 
         // Step 3: Build the prompt
         const prompt     = ANALYSIS_USER_PROMPT(summaryText);
-        const promptHash = providerPromptHash(provider, prompt);
+        const promptHash = providerPromptHash(provider, prompt, 'analysis', model);
 
         // Step 4: Check cache (skip if refresh is true)
         if (!refresh) {
             const cached = await AIInsightsCache.findValid(userId, 'analysis', promptHash, dataHash);
             if (cached) {
-                await recordCacheHit(userId, provider, 'analysis');
+                await recordCacheHit(userId, provider, 'analysis', model);
                 return {
                     analysis:     cached.response,
                     cached:       true,
@@ -535,7 +539,8 @@ const AIService = {
             maxRetries: 3,
             personalKey,
             userId,
-            feature: 'analysis'
+            feature: 'analysis',
+            model
         });
 
         // Step 6: Cache the response (24 hour TTL)
@@ -575,7 +580,7 @@ const AIService = {
      * @param {string} timeframe   - 'Today', 'This Week', 'This Month', 'All'
      * @returns {object} { reply, cached }
      */
-    async chat(userId, userMessage, month = null, timeframe = 'All', personalKey = null, provider = 'velona', conversationHistory = []) {
+    async chat(userId, userMessage, month = null, timeframe = 'All', personalKey = null, provider = 'velona', conversationHistory = [], model = null) {
         // Step 1: Build the user orientation index & advisor system prompt
         const userIndex = await buildUserIndex(userId);
         const systemPrompt = buildAdvisorSystemPrompt(userIndex);
@@ -590,12 +595,12 @@ const AIService = {
         const promptHash = providerPromptHash(provider, {
             prompt: fullUserPrompt,
             history: conversationHistory
-        });
+        }, 'chat', model);
 
         // Step 3: Check cache (1 hour TTL for chat)
         const cached = await AIInsightsCache.findValid(userId, 'chat', promptHash, dataHash);
         if (cached) {
-            await recordCacheHit(userId, provider, 'chat');
+            await recordCacheHit(userId, provider, 'chat', model);
             return {
                 reply: cached.response,
                 cached: true
@@ -611,7 +616,8 @@ const AIService = {
             maxTurns: 5,
             personalKey,
             conversationHistory,
-            feature: 'chat'
+            feature: 'chat',
+            model
         });
 
         // Step 5: Cache response
@@ -645,6 +651,7 @@ const AIService = {
         const userId = options.userId || null;
         const refresh = Boolean(options.refresh);
         const provider = options.provider || 'velona';
+        const model = options.model || null;
 
         const cleanBase64 = String(base64Data || '').replace(/^data:[^;]+;base64,/, '');
         const imageBytes = Buffer.from(cleanBase64, 'base64');
@@ -663,7 +670,7 @@ const AIService = {
         const cacheParams = {
             promptVersion: RECEIPT_PROMPT_VERSION,
             provider,
-            model: getModelFor(provider),
+            model: getModelFor(provider, 'receipt-scan', model),
             fallbackModels: [],
             mimeType: normalizedMime,
             categories: categoryNames
@@ -684,7 +691,7 @@ const AIService = {
             });
 
             if (cached) {
-                await recordCacheHit(userId, provider, 'receipt_scan');
+                await recordCacheHit(userId, provider, 'receipt_scan', model);
                 logAiEventThrottled(
                     'receipt-scan.cache-hit',
                     { user: `u${userId}`, hash: shortHash(contentHash) },
@@ -719,6 +726,7 @@ Return only the JSON object. Do not include markdown, explanations, or extra fie
         const executeScan = async () => {
             const parsed = await callProviderJson(provider, {
                 feature: 'receipt-scan',
+                model,
                 personalKey,
                 userId,
                 temperature: 0.2,
@@ -791,6 +799,7 @@ Return only the JSON object. Do not include markdown, explanations, or extra fie
         const userId = options.userId || null;
         const refresh = Boolean(options.refresh);
         const provider = options.provider || 'velona';
+        const model = options.model || null;
 
         const candidates = (Array.isArray(messages) ? messages : [])
             .filter(message => message && message.body && !isExcludedSmsBody(message.body))
@@ -812,7 +821,7 @@ Return only the JSON object. Do not include markdown, explanations, or extra fie
         const cacheParams = {
             promptVersion: SMS_PROMPT_VERSION,
             provider,
-            model: getModelFor(provider),
+            model: getModelFor(provider, 'sms-parse', model),
             fallbackModels: [],
             categories: categoryNames,
             chunkSize: SMS_CHUNK_SIZE
@@ -833,7 +842,7 @@ Return only the JSON object. Do not include markdown, explanations, or extra fie
             });
 
             if (Array.isArray(cached)) {
-                await recordCacheHit(userId, provider, 'sms_parse');
+                await recordCacheHit(userId, provider, 'sms_parse', model);
                 logAiEventThrottled(
                     'sms-parse.cache-hit',
                     {
@@ -899,6 +908,7 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
 
                 const parsed = await callProviderJson(provider, {
                     feature: 'sms-parse',
+                    model,
                     personalKey,
                     userId,
                     temperature: 0.1,

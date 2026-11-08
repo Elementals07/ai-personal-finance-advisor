@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import ReceiptScannerDock from '../Expenses/ReceiptScannerDock';
+import ReceiptScannerModal from '../Expenses/ReceiptScannerModal';
 import { HiOutlineBars3, HiOutlineSparkles } from 'react-icons/hi2';
 import { useAuth } from '../../context/AuthContext';
 
@@ -77,6 +79,9 @@ const Layout = () => {
                     <Outlet />
                 </div>
             </main>
+
+            <ReceiptScannerDock />
+            <ReceiptScannerModal />
         </div>
     );
 };

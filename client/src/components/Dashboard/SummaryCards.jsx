@@ -20,15 +20,16 @@ const SummaryCards = ({ summary, budget, onIncomeUpdate }) => {
 
     const totalSpending = summary?.totalSpending || 0;
     const monthlyIncome = summary?.monthlyIncome || user?.monthly_income || 0;
-    
-    // Budget calculations
-    const hasBudget = Boolean(budget?.hasBudget);
-    const budgetAmount = budget?.budgetAmount || monthlyIncome;
-    // Spending remaining in plan
-    const remainingInPlan = budgetAmount > 0 ? budgetAmount - totalSpending : (monthlyIncome - totalSpending);
-    const isExceeded = remainingInPlan < 0;
-    
-    // Income minus recorded expenses (plainly labeled as Month Difference, not bank balance)
+
+    // The spending plan is the sum of the category limits saved in MySQL.
+    // It is deliberately different from income: income minus expenses is the
+    // month's net savings, while this is the money left inside the plan.
+    const plannedSpending = Number(budget?.plannedAmount) || 0;
+    const hasCategoryPlan = plannedSpending > 0;
+    const remainingInPlan = hasCategoryPlan ? plannedSpending - totalSpending : null;
+    const isExceeded = hasCategoryPlan && remainingInPlan < 0;
+
+    // Income minus recorded expenses (net savings, not bank balance)
     const netDifference = monthlyIncome - totalSpending;
 
     const formatCurrency = (val) => {
@@ -63,24 +64,34 @@ const SummaryCards = ({ summary, budget, onIncomeUpdate }) => {
 
     return (
         <div className="summary-cards">
-            {/* 1. Money Left in Spending Plan */}
+            {/* 1. Money Left in Category Spending Plan */}
             <div className="summary-card" style={{ borderLeft: `4px solid ${isExceeded ? 'var(--color-danger)' : 'var(--color-primary)'}` }}>
                 <div className="summary-card-header">
                     <div className="summary-card-icon" style={{ backgroundColor: isExceeded ? 'var(--color-danger-subtle)' : 'var(--color-primary-subtle)', color: isExceeded ? 'var(--color-danger)' : 'var(--color-primary)' }}>
                         <HiOutlineBanknotes aria-hidden="true" />
                     </div>
-                    <span className={`summary-card-tag ${isExceeded ? 'danger' : 'positive'}`}>
-                        {hasBudget ? 'Planned Budget' : 'Income Baseline'}
-                    </span>
+                    {hasCategoryPlan ? (
+                        <span className={`summary-card-tag ${isExceeded ? 'danger' : 'positive'}`}>
+                            {isExceeded ? 'Over Plan' : 'Category Plan'}
+                        </span>
+                    ) : (
+                        <span className="summary-card-tag" style={{ backgroundColor: 'var(--bg-surface-subtle)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
+                            Not Planned
+                        </span>
+                    )}
                 </div>
-                <div className="summary-card-label">Money Left in Spending Plan</div>
+                <div className="summary-card-label">Category Budget Left</div>
                 <div className="summary-card-value financial-figure" style={{ color: isExceeded ? 'var(--color-danger)' : 'var(--color-primary)' }}>
-                    {isExceeded ? `-${formatCurrency(remainingInPlan)}` : formatCurrency(remainingInPlan)}
+                    {hasCategoryPlan
+                        ? (isExceeded ? `-${formatCurrency(remainingInPlan)}` : formatCurrency(remainingInPlan))
+                        : '—'}
                 </div>
                 <div className="summary-card-helper">
-                    {isExceeded 
-                        ? 'Over planned budget limit for this month' 
-                        : 'Available to spend within your monthly target'}
+                    {!hasCategoryPlan
+                        ? 'Set category limits on the Budget page to track this.'
+                        : isExceeded
+                            ? `Over your category limits by ${formatCurrency(Math.abs(remainingInPlan))}`
+                            : `${formatCurrency(totalSpending)} of ${formatCurrency(plannedSpending)} category limits used`}
                 </div>
             </div>
 
@@ -188,12 +199,12 @@ const SummaryCards = ({ summary, budget, onIncomeUpdate }) => {
                         {netDifference >= 0 ? 'Saved' : 'Deficit'}
                     </span>
                 </div>
-                <div className="summary-card-label">Monthly Saved Balance</div>
+                <div className="summary-card-label">Monthly Net Savings</div>
                 <div className="summary-card-value financial-figure" style={{ color: netDifference >= 0 ? 'var(--color-primary)' : 'var(--color-danger)' }}>
                     {netDifference < 0 ? '-' : '+'}{formatCurrency(netDifference)}
                 </div>
                 <div className="summary-card-helper">
-                    Income minus recorded expenses (not bank account balance)
+                    Income minus all recorded expenses (not bank account balance)
                 </div>
             </div>
         </div>

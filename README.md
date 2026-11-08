@@ -22,6 +22,7 @@ A full-stack personal finance management system with AI financial intelligence, 
 - **📸 AI Bill & Receipt Scanner**:
   - Multimodal OCR via the selected AI provider.
   - Extracts Merchant, Total Amount, Category, and Itemized Line Items.
+  - **Background Queue**: Upload several receipts at once; up to two scan concurrently and results remain reviewable while you navigate the app.
   - **Smart Date Resolution**: Auto-detects bill date from receipt; defaults to current date if missing/unreadable.
   - **Manual Override**: Native date picker lets user override the bill date before saving.
   - **Multi-Category Split**: Option to split supermarket receipts into multiple category transactions at once (`/api/expenses/batch`).
@@ -90,10 +91,17 @@ AI_USD_TO_INR_RATE=your_current_usd_to_inr_rate
 
 `VELONA_API_KEY` belongs only in the backend root `.env`; never put it in a
 `VITE_` variable, client source, or Android package. `.env` is ignored by Git.
-Velona is selected by default with model `qwen/qwen3.7-flash`. On the AI Advisor
-page, switch **Use Velona AI** off to use Google Gemini. A personal Gemini key
-entered in AI Settings remains in memory only for the current app session and is
-sent only while Gemini is selected.
+Velona is selected by default with model `qwen/qwen3.7-flash`. Its defaults are
+centralized in `server/config/aiModels.js` and can be overridden with the
+optional `AI_MODEL_CHATBOT`, `AI_MODEL_FINANCIAL_ANALYSIS`,
+`AI_MODEL_RECEIPT_SCANNING`, and `AI_MODEL_SMS_TRANSACTION_PARSING` backend
+environment variables. The dedicated **AI Settings** page (sidebar) lets each
+account select and persist a separate Velona model for each feature, and shows
+the catalogue with capabilities and token prices in INR. The backend retrieves
+and caches the Velona catalogue; its API key is never sent to the browser.
+Switch **Use Velona AI** off in AI Settings to use Google Gemini. A personal
+Gemini key entered in AI Settings remains in memory only for the current app
+session and is sent only while Gemini is selected.
 
 The usage panel shows local request/token totals and estimated Velona charges
 using the configured model rates. Set `AI_USD_TO_INR_RATE` to a current conversion
@@ -158,11 +166,15 @@ Runs on `http://localhost:5173`
 │       │   │   ├── AnalysisPanel.jsx      # Traffic light banner, delta badges, AI review
 │       │   │   └── ChatAssistant.jsx      # Interactive advisor chat
 │       │   └── Expenses/
-│       │       ├── BillScannerModal.jsx   # 📸 Camera/upload OCR & editable review modal
+│       │       ├── ReceiptScannerDock.jsx # 📸 Persistent background-scan status dock
+│       │       ├── ReceiptScannerModal.jsx# Multi-receipt queue, OCR review & save
 │       │       └── ExpenseForm.jsx        # Manual entry with quick OCR button
+│       ├── context/
+│       │   └── ReceiptScannerContext.jsx  # In-memory scan queue (max 2 concurrent)
 │       ├── utils/
 │       │   └── advisorFormatter.js        # Dynamic Markdown -> Card & KPI HTML parser
 │       ├── pages/
+│       │   ├── AISettingsPage.jsx         # Provider, model, capability & INR pricing
 │       │   ├── ExpensesPage.jsx           # Includes '📸 Scan Bill' button
 │       │   └── DashboardPage.jsx
 │       └── App.css                        # Executive advisor visual styles
